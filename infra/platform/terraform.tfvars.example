@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars (git-ignored) and fill in. No credentials go here:
+# Terraform reads the AWS profile from the environment (AWS_PROFILE=sscp).
+admin_email = "you@example.com"
+
+# If `aws cloudtrail describe-trails` already lists a management-event trail,
+# reuse it instead of creating a second (billed) one:
+create_trail        = true
+existing_trail_name = ""
+
+monthly_budget_usd = 30

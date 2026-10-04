@@ -1,0 +1,23 @@
+version: 0.2
+
+env:
+  variables:
+    TF_VERSION: "1.15.7"
+    TF_PLUGIN_CACHE_DIR: "/root/.terraform.d/plugin-cache"
+
+phases:
+  install:
+    commands:
+      - mkdir -p "$TF_PLUGIN_CACHE_DIR"
+      - curl -fsSLo /tmp/tf.zip "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+      - curl -fsSLo /tmp/tf.sums "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_SHA256SUMS"
+      - (cd /tmp && grep "linux_amd64.zip" tf.sums | sed "s/terraform_${TF_VERSION}_linux_amd64.zip/tf.zip/" | sha256sum -c -)
+      - unzip -o -q /tmp/tf.zip -d /usr/local/bin && terraform version
+      - python3 -m pip install --quiet "boto3>=1.35"
+  build:
+    commands:
+      - python3 -m runner.main
+
+cache:
+  paths:
+    - "/root/.terraform.d/plugin-cache/**/*"

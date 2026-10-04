@@ -1,0 +1,152 @@
+{
+  "snapshot_id": "seed-2026-10-04",
+  "region": "ap-northeast-2",
+  "currency": "USD",
+  "updated_at": "2026-10-04",
+  "source": "manual",
+  "source_detail": "Entered by hand from the public AWS pricing pages (aws.amazon.com/<service>/pricing) for ap-northeast-2; CloudFront, WAF and CloudWatch alarm prices for us-east-1/global. Not fetched from the Price List API.",
+  "approximate": true,
+  "note": "Estimates only. Automatic refresh from the AWS Price List API is deferred until after the first AWS E2E (O-08); until then update this file by hand and bump snapshot_id/updated_at.",
+  "prices": {
+    "cloudfront.request_https_per_10k": {
+      "value": 0.012,
+      "source": "seed"
+    },
+    "cloudfront.transfer_out_per_gb": {
+      "value": 0.12,
+      "source": "seed"
+    },
+    "s3.storage_gb_month": {
+      "value": 0.025,
+      "source": "seed"
+    },
+    "s3.get_per_1k": {
+      "value": 0.00035,
+      "source": "seed"
+    },
+    "lambda.request_per_1m": {
+      "value": 0.2,
+      "source": "seed"
+    },
+    "lambda.gb_second": {
+      "value": 1.66667e-05,
+      "source": "seed"
+    },
+    "lambda.pc_gb_second": {
+      "value": 4.1667e-06,
+      "source": "seed"
+    },
+    "lambda.pc_duration_gb_second": {
+      "value": 9.7222e-06,
+      "source": "seed"
+    },
+    "apigw.http_request_per_1m": {
+      "value": 1.29,
+      "source": "seed"
+    },
+    "fargate.vcpu_hour": {
+      "value": 0.04656,
+      "source": "seed"
+    },
+    "fargate.gb_hour": {
+      "value": 0.00511,
+      "source": "seed"
+    },
+    "fargate_spot.vcpu_hour": {
+      "value": 0.014,
+      "source": "seed"
+    },
+    "fargate_spot.gb_hour": {
+      "value": 0.00154,
+      "source": "seed"
+    },
+    "vpc.public_ipv4_hour": {
+      "value": 0.005,
+      "source": "seed"
+    },
+    "alb.hour": {
+      "value": 0.0225,
+      "source": "seed"
+    },
+    "alb.lcu_hour": {
+      "value": 0.008,
+      "source": "seed"
+    },
+    "vpce.interface_hour_per_az": {
+      "value": 0.013,
+      "source": "seed"
+    },
+    "rds.db.t4g.micro.hour": {
+      "value": 0.025,
+      "source": "seed"
+    },
+    "rds.db.t4g.small.hour": {
+      "value": 0.051,
+      "source": "seed"
+    },
+    "rds.gp3_gb_month": {
+      "value": 0.131,
+      "source": "seed"
+    },
+    "aurora.acu_hour": {
+      "value": 0.16,
+      "source": "seed"
+    },
+    "aurora.storage_gb_month": {
+      "value": 0.11,
+      "source": "seed"
+    },
+    "aurora.io_per_1m": {
+      "value": 0.22,
+      "source": "seed"
+    },
+    "dynamodb.write_per_1m": {
+      "value": 0.7068,
+      "source": "seed"
+    },
+    "dynamodb.read_per_1m": {
+      "value": 0.1413,
+      "source": "seed"
+    },
+    "dynamodb.storage_gb_month": {
+      "value": 0.285,
+      "source": "seed"
+    },
+    "dynamodb.pitr_gb_month": {
+      "value": 0.228,
+      "source": "seed"
+    },
+    "waf.web_acl_month": {
+      "value": 5.0,
+      "source": "seed"
+    },
+    "waf.rule_month": {
+      "value": 1.0,
+      "source": "seed"
+    },
+    "waf.request_per_1m": {
+      "value": 0.6,
+      "source": "seed"
+    },
+    "secretsmanager.secret_month": {
+      "value": 0.4,
+      "source": "seed"
+    },
+    "cloudwatch.alarm_month": {
+      "value": 0.1,
+      "source": "seed"
+    },
+    "cloudwatch.dashboard_month": {
+      "value": 3.0,
+      "source": "seed"
+    },
+    "cloudwatch.logs_ingest_gb": {
+      "value": 0.76,
+      "source": "seed"
+    },
+    "ecr.storage_gb_month": {
+      "value": 0.1,
+      "source": "seed"
+    }
+  }
+}

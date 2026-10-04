@@ -1,0 +1,27 @@
+[project]
+name = "self-service-cloud-platform"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["aws: requires real AWS credentials (opt-in via SSCP_AWS_TESTS=1)"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py311"
+extend-exclude = ["build", ".terraform-plugin-cache", "references", "tests/ui/vendor"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S"]
+ignore = [
+  "S101",  # assert in tests
+  "S310",  # urllib with URLs built from our own config
+  "S603", "S607",  # subprocess calling terraform by name is intended
+  "S311",  # random in tests
+  "E731",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S108", "B017"]
+"scripts/local_dev.py" = ["E402", "S105"]

@@ -1,0 +1,73 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PlatformServices",
+      "Effect": "Allow",
+      "Action": [
+        "s3:*",
+        "cloudfront:*",
+        "wafv2:*",
+        "dynamodb:*",
+        "cognito-idp:*",
+        "lambda:*",
+        "apigateway:*",
+        "states:*",
+        "codebuild:*",
+        "scheduler:*",
+        "logs:*",
+        "cloudtrail:*",
+        "budgets:*",
+        "sns:*",
+        "cloudwatch:*",
+        "events:*",
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": { "aws:RequestedRegion": ["ap-northeast-2", "us-east-1"] }
+      }
+    },
+    {
+      "Sid": "GlobalServicesWithoutRegion",
+      "Effect": "Allow",
+      "Action": ["cloudfront:*", "budgets:*", "iam:GetRole", "iam:ListRoles"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ManagePlatformRolesAndPoliciesOnly",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:TagRole", "iam:UntagRole", "iam:UpdateAssumeRolePolicy",
+        "iam:PutRolePolicy", "iam:GetRolePolicy", "iam:DeleteRolePolicy", "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies", "iam:ListInstanceProfilesForRole", "iam:PutRolePermissionsBoundary",
+        "iam:CreatePolicy", "iam:DeletePolicy", "iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyVersions",
+        "iam:CreatePolicyVersion", "iam:DeletePolicyVersion", "iam:TagPolicy", "iam:UntagPolicy"
+      ],
+      "Resource": [
+        "arn:aws:iam::*:role/sscp-*",
+        "arn:aws:iam::*:policy/sscp-*"
+      ]
+    },
+    {
+      "Sid": "PassOnlyPlatformRoles",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::*:role/sscp-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": ["lambda.amazonaws.com", "codebuild.amazonaws.com", "states.amazonaws.com", "scheduler.amazonaws.com"]
+        }
+      }
+    },
+    {
+      "Sid": "NeverTheseFromTheDeployer",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreateUser", "iam:CreateAccessKey", "iam:AttachUserPolicy", "iam:PutUserPolicy",
+        "organizations:*", "account:*", "ec2:CreateNatGateway"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

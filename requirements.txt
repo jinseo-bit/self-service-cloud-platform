@@ -1,0 +1,3 @@
+# Runtime for the control plane, runner and scripts.
+# Lambda python3.12 ships boto3; the CodeBuild runner installs it (runner/buildspec.yml).
+boto3>=1.35

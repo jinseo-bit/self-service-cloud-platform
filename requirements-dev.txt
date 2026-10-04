@@ -1,0 +1,6 @@
+# Local development and tests (never deployed)
+-r requirements.txt
+pytest>=8
+moto[dynamodb,s3,stepfunctions]>=5.0
+playwright>=1.45      # then: python -m playwright install chromium
+ruff>=0.6
