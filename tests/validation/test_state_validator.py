@@ -43,7 +43,7 @@ def dist_config(viewer="redirect-to-https", logging=True, enabled=True, headers=
     }}
 
 
-def run(bpa_all=True, policy=GOOD_POLICY, encryption=True, cfg=None, bucket_tags=TAGS, trail_logging=True):
+def run(bpa_all=True, policy=GOOD_POLICY, encryption=True, cfg=None, bucket_tags=TAGS, trail_logging=True, versioning="Enabled"):
     s3 = boto3.client("s3", region_name="ap-northeast-2", aws_access_key_id="x", aws_secret_access_key="x")
     cf = boto3.client("cloudfront", region_name="us-east-1", aws_access_key_id="x", aws_secret_access_key="x")
     ct = boto3.client("cloudtrail", region_name="ap-northeast-2", aws_access_key_id="x", aws_secret_access_key="x")
@@ -68,6 +68,8 @@ def run(bpa_all=True, policy=GOOD_POLICY, encryption=True, cfg=None, bucket_tags
         s3s.add_response("get_bucket_lifecycle_configuration", {"Rules": [
             {"ID": "expire", "Status": "Enabled", "Filter": {"Prefix": ""}, "Expiration": {"Days": 90}}]},
             {"Bucket": "sscp-logs-111122223333"})
+        s3s.add_response("get_bucket_versioning", {"Status": versioning} if versioning else {},
+                         {"Bucket": "sscp-logs-111122223333"})
         return validate_static_state(s3=s3, cloudfront=cf, cloudtrail=ct, ctx=CTX)
 
 
@@ -94,6 +96,8 @@ def test_compliant_environment_passes():
     (dict(bucket_tags={k: v for k, v in TAGS.items() if k != "owner"}), "PR-ALL-09"),
     (dict(bucket_tags={k: v for k, v in TAGS.items() if k != "expires-at"}), "PR-ALL-08"),
     (dict(trail_logging=False), "SB-LOG-01"),
+    (dict(versioning="Suspended"), "SB-LOG-01/versioning"),
+    (dict(versioning=None), "SB-LOG-01/versioning"),  # never enabled: the API returns no Status
 ])
 def test_negative_state_violation_is_caught(kwargs, check_id):
     results = run(**kwargs)
@@ -117,7 +121,7 @@ def test_disabled_distribution_is_reachability_failure_only():
 def test_all_static_state_checks_present():
     ids = {r.check_id for r in run()}
     assert {"SB-PUB-01", "SB-ENC-01", "SB-TLS-04", "SB-PUB-01/policy", "SB-TLS-01", "SB-TLS-05",
-            "SB-LOG-02", "SB-LOG-01", "PR-ALL-09", "PR-ALL-08", "PR-ALL-05"} <= ids
+            "SB-LOG-02", "SB-LOG-01", "SB-LOG-01/versioning", "PR-ALL-09", "PR-ALL-08", "PR-ALL-05"} <= ids
     assert all(r.status in (PASS, "NOT_APPLICABLE") for r in run())
 
 

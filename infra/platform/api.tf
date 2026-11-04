@@ -243,7 +243,25 @@ resource "aws_lambda_function" "worker" {
       PLATFORM_PREFIX = local.prefix # CloudTrail calls by the platform's own roles are not drift
     })
   }
-  depends_on = [aws_cloudwatch_log_group.worker_fn]
+  # B-1 (D-189): the code checks log-bucket versioning, a Security check. If it went live before versioning or the read
+  # permission, every Static recheck would see a new security failure and block the endpoint (D-65).
+  depends_on = [aws_cloudwatch_log_group.worker_fn, aws_iam_role_policy.worker_log_versioning, aws_s3_bucket_versioning.logs]
+}
+
+# A separate policy so the worker Lambda can depend on it: the main worker policy references the state machines,
+# which reference the worker Lambda (a cycle).
+resource "aws_iam_role_policy" "worker_log_versioning" {
+  name = "log-bucket-versioning-read"
+  role = aws_iam_role.worker.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "ReadLogBucketVersioning" # SB-LOG-01/versioning
+      Effect   = "Allow"
+      Action   = "s3:GetBucketVersioning"
+      Resource = aws_s3_bucket.logs.arn
+    }]
+  })
 }
 
 # ---------------------------------------------------------------- TTL sweep (D-63)
