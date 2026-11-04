@@ -78,6 +78,24 @@ resource "aws_cognito_user_pool_client" "web" {
   }
 }
 
+# D-181: the Claude Code agent (MCP server) signs in with its own client. The API recognises this client id and lets it
+# draft and read only; approve/delete/retry/redeploy stay with a person in the web UI. Shorter refresh token than the UI.
+resource "aws_cognito_user_pool_client" "agent" {
+  name                          = "${local.prefix}-agent"
+  user_pool_id                  = aws_cognito_user_pool.users.id
+  generate_secret               = false
+  explicit_auth_flows           = ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]
+  prevent_user_existence_errors = "ENABLED"
+  access_token_validity         = 1
+  id_token_validity             = 1
+  refresh_token_validity        = 1
+  token_validity_units {
+    access_token  = "hours"
+    id_token      = "hours"
+    refresh_token = "days"
+  }
+}
+
 resource "aws_cognito_user_group" "admin" {
   name         = "admin"
   user_pool_id = aws_cognito_user_pool.users.id

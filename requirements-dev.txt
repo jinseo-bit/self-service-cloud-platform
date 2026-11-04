@@ -4,3 +4,4 @@ pytest>=8
 moto[dynamodb,s3,stepfunctions]>=5.0
 playwright>=1.45      # then: python -m playwright install chromium
 ruff>=0.6
+mcp>=1.29,<2          # agent/mcp_server.py uses FastMCP, renamed to MCPServer in 2.x (Claude Code MCP server, runs on the developer's machine)

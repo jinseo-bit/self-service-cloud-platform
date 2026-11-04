@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "sscp": {
+      "command": "python",
+      "args": ["-m", "agent.mcp_server"]
+    },
+    "aws-api": {
+      "command": "uvx",
+      "args": ["--from", "awslabs.aws-api-mcp-server@latest", "awslabs.aws-api-mcp-server.exe"],
+      "env": {
+        "AWS_API_MCP_PROFILE_NAME": "sscp",
+        "AWS_REGION": "ap-northeast-2",
+        "READ_OPERATIONS_ONLY": "true",
+        "AWS_API_MCP_ALLOW_UNRESTRICTED_LOCAL_FILE_ACCESS": "no-access",
+        "AWS_API_MCP_TELEMETRY": "false"
+      }
+    }
+  }
+}

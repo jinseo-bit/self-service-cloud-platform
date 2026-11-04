@@ -1,0 +1,60 @@
+{
+  "_about": "HELD-OUT set (D-184): apps chosen and ground truth written on 2026-10-26 from the repos at the pinned commits, BEFORE the analyzer was run on any of them. No analyzer rule is changed because of these results; they measure how the v1 rules generalize. Mixed languages on purpose (Rust has no rules yet). Same schema as apps.json. DRAFT until 이진서 reviews (reviewed_by null).",
+  "apps": [
+    {
+      "id": "reveal-js", "repo": "hakimel/reveal.js", "commit": "e240e175232fa2de660a02bc0d7bf5f655b159bb", "license": "MIT",
+      "category": "static", "why": "HTML presentation framework; ships index.html + a vite build",
+      "expected": {"app_form": "STATIC_SITE", "realtime_connection": false, "large_payload": false, "in_memory_state": false,
+                   "non_http": false, "request_duration": null, "data": "NONE", "multi_service": false, "port_env": null, "spa_fallback": false},
+      "expected_outcome": {"blueprint": "static", "status": "PROVISIONABLE"},
+      "evidence": [{"file": "index.html", "finding": "entry page at the root"}, {"file": "package.json", "finding": "no runtime dependencies; vite build scripts"}],
+      "reviewed_by": null
+    },
+    {
+      "id": "memos", "repo": "usememos/memos", "commit": "0bfa31e89ec550c7cc6a1dea3888af2d0de107c2", "license": "MIT",
+      "category": "local-disk", "why": "note-taking server (Go) that serves its React UI; SQLite on a volume by default",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": false, "large_payload": false, "in_memory_state": true,
+                   "non_http": false, "request_duration": null, "data": "OTHER", "multi_service": false, "port_env": "MEMOS_PORT", "spa_fallback": false},
+      "expected_outcome": {"blueprint": "container", "status": "UNSUPPORTED"},
+      "evidence": [{"file": "cmd/memos/main.go", "finding": "driver default sqlite (mysql/postgres optional); port flag 8081 bound to env with prefix MEMOS_"},
+                   {"file": "scripts/Dockerfile", "finding": "VOLUME /var/opt/memos, EXPOSE 5230"},
+                   {"file": "server/api/upload_session.go", "finding": "uploads are chunked at 2 MiB, 4 MiB per request -> not a large payload"},
+                   {"file": "go.mod", "finding": "gorilla/websocket only as an indirect dependency"}],
+      "notes": "Needs a persistent volume for SQLite and attachments (no EFS in the platform).",
+      "reviewed_by": null
+    },
+    {
+      "id": "thelounge", "repo": "thelounge/thelounge", "commit": "70db8bcb6faf98e9c2a09018e26c28ae3eaa0b09", "license": "MIT",
+      "category": "realtime-local-disk", "why": "web IRC client: socket.io to the browser, long-lived IRC connections, users and logs on local disk",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": true, "large_payload": false, "in_memory_state": true,
+                   "non_http": false, "request_duration": null, "data": "OTHER", "multi_service": false, "port_env": null, "spa_fallback": false},
+      "expected_outcome": {"blueprint": "container", "status": "UNSUPPORTED"},
+      "evidence": [{"file": "package.json", "finding": "socket.io, express, irc-framework, @fastify/busboy"},
+                   {"file": "defaults/config.js", "finding": "port 9000 in a config file (no PORT env); fileUpload.enable false by default"},
+                   {"file": "server/plugins/messageStorage/sqlite.ts", "finding": "node:sqlite logs under THELOUNGE_HOME"}],
+      "notes": "Port comes from config.js in THELOUNGE_HOME, not an env var: the app contract needs a config file. Users and logs need a persistent home directory.",
+      "reviewed_by": null
+    },
+    {
+      "id": "httpbin-py", "repo": "postmanlabs/httpbin", "commit": "f8ec666b4d1b654e4ff6aedd356f510dcac09f83", "license": "ISC",
+      "category": "contract-gap", "why": "the original Python httpbin: stateless API, but the image pins port 80 in its CMD",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": false, "large_payload": false, "in_memory_state": false,
+                   "non_http": false, "request_duration": null, "data": "NONE", "multi_service": false, "port_env": null, "spa_fallback": false},
+      "expected_outcome": {"blueprint": "serverless", "status": "INCOMPATIBLE"},
+      "evidence": [{"file": "setup.py", "finding": "Flask, gevent, flasgger"}, {"file": "Dockerfile", "finding": "CMD gunicorn -b 0.0.0.0:80 (command-line bind wins over GUNICORN_CMD_ARGS)"}],
+      "notes": "Same gap as hashicorp/http-echo, but through a Dockerfile CMD rather than a Go flag.",
+      "reviewed_by": null
+    },
+    {
+      "id": "vaultwarden", "repo": "dani-garcia/vaultwarden", "commit": "b71cb7a832080d9fdfdd97bcccf065307cf73236", "license": "AGPL-3.0",
+      "category": "realtime-local-disk", "why": "Bitwarden-compatible server in Rust: WebSocket notifications, SQLite on /data",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": true, "large_payload": false, "in_memory_state": true,
+                   "non_http": false, "request_duration": null, "data": "OTHER", "multi_service": false, "port_env": "ROCKET_PORT", "spa_fallback": false},
+      "expected_outcome": {"blueprint": "container", "status": "UNSUPPORTED"},
+      "evidence": [{"file": "src/config.rs", "finding": "enable_websocket default true"}, {"file": "docker/Dockerfile.debian", "finding": "ROCKET_PORT=80, VOLUME /data, EXPOSE 80"},
+                   {"file": "Cargo.toml", "finding": "diesel with sqlite / mysql / postgresql features"}],
+      "notes": "Rust: the v1 analyzer has no Rust rules, so this measures what it does with an unknown language.",
+      "reviewed_by": null
+    }
+  ]
+}

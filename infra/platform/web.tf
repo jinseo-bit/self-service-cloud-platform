@@ -92,3 +92,8 @@ output "environment_table" {
 output "ui_distribution_id" {
   value = module.ui_edge.distribution_id
 }
+
+output "agent_client_id" {
+  description = "Cognito client for the Claude Code agent (python -m agent.login --client-id ...). Not a secret."
+  value       = aws_cognito_user_pool_client.agent.id
+}

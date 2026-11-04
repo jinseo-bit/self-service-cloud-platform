@@ -1,0 +1,143 @@
+{
+  "_about": "Baseline public web apps (instructor feedback 2026-10-09, D-183). Each entry pins a commit, the facts an SA reads from the repo (with the file each came from), and the SA's expected outcome. 'expected' is the ground truth the repo analyzer is scored against; 'expected_outcome' is what an SA would deploy today. DRAFT written 2026-10-25 from the repos at the pinned commits -- reviewed_by stays null until 이진서 confirms each entry.",
+  "fields": {
+    "app_form": "STATIC_SITE | SERVER_APP | STATIC_PLUS_API",
+    "realtime_connection / large_payload / in_memory_state / non_http": "engine capabilities (bool)",
+    "request_duration": "engine value, or null when the code does not say (the developer must answer)",
+    "data": "NONE | POSTGRES | DYNAMODB | OTHER (engine data.detected)",
+    "multi_service": "more than one deployable service (outside the platform's scope)",
+    "port_env": "how the app is told to listen on 8080: PORT, another env var name, or null when only a CLI flag works",
+    "expected_outcome.status": "PROVISIONABLE | RECOMMEND_ONLY (designed, not buildable yet) | UNSUPPORTED | INCOMPATIBLE (fits a blueprint but breaks the app contract)"
+  },
+  "apps": [
+    {
+      "id": "2048", "repo": "gabrielecirulli/2048", "commit": "478b6ec346e3787f589e4af751378d06ded4cbbc", "license": "MIT",
+      "category": "static", "why": "pure HTML/JS game, no build step",
+      "expected": {"app_form": "STATIC_SITE", "realtime_connection": false, "large_payload": false, "in_memory_state": false,
+                   "non_http": false, "request_duration": null, "data": "NONE", "multi_service": false, "port_env": null, "spa_fallback": false},
+      "expected_outcome": {"blueprint": "static", "status": "PROVISIONABLE"},
+      "evidence": [{"file": "index.html", "finding": "entry page at the root"}, {"file": "js/local_storage_manager.js", "finding": "state lives in the browser, not on a server"}],
+      "reviewed_by": null
+    },
+    {
+      "id": "mdn-site", "repo": "mdn/beginner-html-site-styled", "commit": "6c7a360ddb4a0d75be06044bf8a914f260ff10c7", "license": "CC0-1.0",
+      "category": "static", "why": "smallest possible static site (MDN learning sample)",
+      "expected": {"app_form": "STATIC_SITE", "realtime_connection": false, "large_payload": false, "in_memory_state": false,
+                   "non_http": false, "request_duration": null, "data": "NONE", "multi_service": false, "port_env": null, "spa_fallback": false},
+      "expected_outcome": {"blueprint": "static", "status": "PROVISIONABLE"},
+      "evidence": [{"file": "index.html", "finding": "HTML + styles/ + images/ only"}],
+      "reviewed_by": null
+    },
+    {
+      "id": "realworld-react", "repo": "gothinkster/react-redux-realworld-example-app", "commit": "ee72eba4056392c95a27bc48d385d3f54ba38a18", "license": "MIT",
+      "category": "static-spa", "why": "React SPA with client-side routing; tests the SPA fallback setting",
+      "expected": {"app_form": "STATIC_SITE", "realtime_connection": false, "large_payload": false, "in_memory_state": false,
+                   "non_http": false, "request_duration": null, "data": "NONE", "multi_service": false, "port_env": null, "spa_fallback": true},
+      "expected_outcome": {"blueprint": "static", "status": "PROVISIONABLE"},
+      "evidence": [{"file": "package.json", "finding": "react-scripts build, react-router-dom; no server framework"},
+                   {"file": "src/store.js", "finding": "createBrowserHistory -> deep links need index.html fallback"}],
+      "notes": "Calls an external RealWorld API; the platform hosts only the built files.",
+      "reviewed_by": null
+    },
+    {
+      "id": "go-httpbin", "repo": "mccutchen/go-httpbin", "commit": "8b1bc1433750404fefd2a419cda3720d3088701b", "license": "MIT",
+      "category": "request-api", "why": "stateless HTTP API; already ran on Serverless and Container in E2E (2026-10-11)",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": false, "large_payload": false, "in_memory_state": false,
+                   "non_http": false, "request_duration": null, "data": "NONE", "multi_service": false, "port_env": "PORT", "spa_fallback": false},
+      "expected_outcome": {"blueprint": "serverless", "status": "PROVISIONABLE"},
+      "evidence": [{"file": "Dockerfile", "finding": "EXPOSE 8080, distroless nonroot"}, {"file": "README.md", "finding": "PORT env, default 8080; MAX_DURATION default 10s"}],
+      "reviewed_by": null
+    },
+    {
+      "id": "whoami", "repo": "traefik/whoami", "commit": "1ce75d01b6978863647da42557a707a479da3a51", "license": "Apache-2.0",
+      "category": "ambiguous", "why": "request echo server that ALSO has a WebSocket endpoint (/echo): the developer must say whether it is used",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": true, "large_payload": false, "in_memory_state": false,
+                   "non_http": false, "request_duration": null, "data": "NONE", "multi_service": false, "port_env": "WHOAMI_PORT_NUMBER", "spa_fallback": false},
+      "expected_outcome": {"blueprint": "container", "status": "PROVISIONABLE"},
+      "evidence": [{"file": "go.mod", "finding": "github.com/gorilla/websocket"}, {"file": "app.go", "finding": "port flag defaults to WHOAMI_PORT_NUMBER, else 80"}],
+      "notes": "Without /echo it fits Serverless (E2E 2026-10-07). Default port 80 -> WHOAMI_PORT_NUMBER=8080 is required.",
+      "reviewed_by": null
+    },
+    {
+      "id": "http-echo", "repo": "hashicorp/http-echo", "commit": "767bbd9c3d1905acb04891d5c5e208de17b34a71", "license": "MPL-2.0",
+      "category": "contract-gap", "why": "tiny API whose port is set only by a CLI flag",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": false, "large_payload": false, "in_memory_state": false,
+                   "non_http": false, "request_duration": null, "data": "NONE", "multi_service": false, "port_env": null, "spa_fallback": false},
+      "expected_outcome": {"blueprint": "serverless", "status": "INCOMPATIBLE"},
+      "evidence": [{"file": "main.go", "finding": "-listen flag default :5678; only ECHO_TEXT is read from env"}, {"file": "Dockerfile", "finding": "EXPOSE 5678"}],
+      "notes": "Platform gap: the app contract (D-34) has no container args, so an app that cannot read its port from env cannot run.",
+      "reviewed_by": null
+    },
+    {
+      "id": "gotenberg", "repo": "gotenberg/gotenberg", "commit": "e4ee0f29d648f8d5a0a766dd797d108361905deb", "license": "MIT",
+      "category": "long-large", "why": "document-to-PDF API: multi-MB uploads, conversions up to the 30s default timeout",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": false, "large_payload": true, "in_memory_state": false,
+                   "non_http": false, "request_duration": "ABOUT_30S", "data": "NONE", "multi_service": false, "port_env": "API_PORT", "spa_fallback": false},
+      "expected_outcome": {"blueprint": "container", "status": "PROVISIONABLE"},
+      "evidence": [{"file": "pkg/modules/api/api.go", "finding": "api-timeout default 30s, api-body-limit for multipart uploads, api-port default 3000"},
+                   {"file": "cmd/gotenberg.go", "finding": "every flag can be overridden by an environment variable"}],
+      "reviewed_by": null
+    },
+    {
+      "id": "etherpad", "repo": "ether/etherpad-lite", "commit": "f36f7abf947a61b7f688e923ce34e800e8165be0", "license": "Apache-2.0",
+      "category": "realtime-db", "why": "real-time collaborative editor (socket.io); pads must survive restarts",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": true, "large_payload": false, "in_memory_state": true,
+                   "non_http": false, "request_duration": null, "data": "POSTGRES", "multi_service": false, "port_env": "PORT", "spa_fallback": false},
+      "expected_outcome": {"blueprint": "container", "status": "RECOMMEND_ONLY"},
+      "evidence": [{"file": "src/package.json", "finding": "socket.io, express-session, ueberdb2 (+ pg, mysql2, mongodb, redis drivers)"},
+                   {"file": "settings.json.docker", "finding": "dbType ${DB_TYPE:dirty}; 'dirty' is for testing only; port ${PORT:9001}"}],
+      "notes": "Production needs a real DB (postgres supported) -> DB layer is recommendation-only today.",
+      "reviewed_by": null
+    },
+    {
+      "id": "uptime-kuma", "repo": "louislam/uptime-kuma", "commit": "add209e29b948a8455156fbb2a2fec327288be79", "license": "MIT",
+      "category": "realtime-local-disk", "why": "monitoring dashboard: socket.io UI + always-on background checks + SQLite on local disk",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": true, "large_payload": false, "in_memory_state": true,
+                   "non_http": false, "request_duration": null, "data": "OTHER", "multi_service": false, "port_env": "PORT", "spa_fallback": false},
+      "expected_outcome": {"blueprint": "container", "status": "UNSUPPORTED"},
+      "evidence": [{"file": "package.json", "finding": "socket.io, better-sqlite3, knex"}, {"file": "server/database.js", "finding": "DATA_DIR default ./data/ (SQLite file)"},
+                   {"file": "server/config.js", "finding": "port from UPTIME_KUMA_PORT or PORT, default 3001"}],
+      "notes": "Needs a persistent volume (no EFS in the platform). Also runs background jobs, which the 10 questions cannot express.",
+      "reviewed_by": null
+    },
+    {
+      "id": "realworld-node", "repo": "gothinkster/node-express-realworld-example-app", "commit": "30b68e1e881462b2f4164ea09ab4c4f5699c7b0b", "license": "MIT",
+      "category": "api-db", "why": "typical REST API + PostgreSQL",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": false, "large_payload": false, "in_memory_state": false,
+                   "non_http": false, "request_duration": null, "data": "POSTGRES", "multi_service": false, "port_env": "PORT", "spa_fallback": false},
+      "expected_outcome": {"blueprint": "serverless", "status": "RECOMMEND_ONLY"},
+      "evidence": [{"file": "package.json", "finding": "express, @prisma/client, express-jwt (stateless JWT)"}, {"file": "src/prisma/schema.prisma", "finding": "provider = postgresql"}],
+      "reviewed_by": null
+    },
+    {
+      "id": "petclinic", "repo": "spring-projects/spring-petclinic", "commit": "500158f732419217507c7656904b8e6aa1bcc0d6", "license": "Apache-2.0",
+      "category": "java-db", "why": "Spring Boot server-rendered app; in-memory H2 by default, MySQL/Postgres profiles",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": false, "large_payload": false, "in_memory_state": false,
+                   "non_http": false, "request_duration": null, "data": "POSTGRES", "multi_service": false, "port_env": "SERVER_PORT", "spa_fallback": false},
+      "expected_outcome": {"blueprint": "serverless", "status": "RECOMMEND_ONLY"},
+      "evidence": [{"file": "src/main/resources/application.properties", "finding": "database=h2 (data lost on restart)"},
+                   {"file": "docker-compose.yml", "finding": "mysql and postgres services for the real profiles"}],
+      "notes": "Spring Boot listens on 8080 by default. JVM cold start makes Lambda slow on the first request.",
+      "reviewed_by": null
+    },
+    {
+      "id": "minecraft", "repo": "itzg/docker-minecraft-server", "commit": "e6610b4964e5f26608931a0405bcbb0fced510c1", "license": "Apache-2.0",
+      "category": "out-of-scope", "why": "game server over raw TCP",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": false, "large_payload": false, "in_memory_state": true,
+                   "non_http": true, "request_duration": null, "data": "NONE", "multi_service": false, "port_env": null, "spa_fallback": false},
+      "expected_outcome": {"blueprint": "none", "status": "UNSUPPORTED"},
+      "evidence": [{"file": "Dockerfile", "finding": "EXPOSE 25565 (Minecraft protocol, not HTTP)"}],
+      "reviewed_by": null
+    },
+    {
+      "id": "online-boutique", "repo": "GoogleCloudPlatform/microservices-demo", "commit": "38e7348eb289eb5b87c0c6e8cb19ced0449dc389", "license": "Apache-2.0",
+      "category": "out-of-scope", "why": "11 microservices talking gRPC + Redis",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": false, "large_payload": false, "in_memory_state": false,
+                   "non_http": false, "request_duration": null, "data": "OTHER", "multi_service": true, "port_env": "PORT", "spa_fallback": false},
+      "expected_outcome": {"blueprint": "none", "status": "UNSUPPORTED"},
+      "evidence": [{"file": "src/*/Dockerfile", "finding": "one Dockerfile per service (11)"}, {"file": "kubernetes-manifests/", "finding": "Deployments + redis-cart"}],
+      "notes": "The 10 questions describe one service; a multi-service app has no way to be expressed (question-format gap).",
+      "reviewed_by": null
+    }
+  ]
+}

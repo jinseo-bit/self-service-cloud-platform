@@ -1,0 +1,55 @@
+{
+  "_about": "HELD-OUT set 2 (D-184) for analyzer v2: apps chosen and ground truth written on 2026-10-27 from the repos at the pinned commits, AFTER v2's rules were fixed and BEFORE v2 was run on any of them. No rule is changed because of these results. DRAFT until 이진서 reviews (reviewed_by null).",
+  "apps": [
+    {
+      "id": "realworld-vue", "repo": "gothinkster/vue-realworld-example-app", "commit": "f7e48c8178602ce25d43293bc6f8ca51d84ae222", "license": "MIT",
+      "category": "static-spa", "why": "Vue SPA with HTML5 history routing",
+      "expected": {"app_form": "STATIC_SITE", "realtime_connection": false, "large_payload": false, "in_memory_state": false,
+                   "non_http": false, "request_duration": null, "data": "NONE", "multi_service": false, "port_env": null, "spa_fallback": true},
+      "expected_outcome": {"blueprint": "static", "status": "PROVISIONABLE"},
+      "evidence": [{"file": "package.json", "finding": "vue, vue-router; vite build"}, {"file": "src/router/index.js", "finding": "createWebHistory -> deep links need index.html fallback"}],
+      "reviewed_by": null
+    },
+    {
+      "id": "fastapi-template", "repo": "fastapi/full-stack-fastapi-template", "commit": "f4bcfaba7c85be3c6332cc74a20819f586dcdbc6", "license": "MIT",
+      "category": "static-plus-api-db", "why": "React frontend + FastAPI backend + PostgreSQL in one repo",
+      "expected": {"app_form": "STATIC_PLUS_API", "realtime_connection": false, "large_payload": false, "in_memory_state": false,
+                   "non_http": false, "request_duration": null, "data": "POSTGRES", "multi_service": false, "port_env": null, "spa_fallback": true},
+      "expected_outcome": {"blueprint": "serverless", "status": "RECOMMEND_ONLY"},
+      "evidence": [{"file": "backend/pyproject.toml", "finding": "fastapi, sqlmodel, psycopg"}, {"file": "compose.yml", "finding": "db: postgres:18, backend built here; proxy/adminer are images"},
+                   {"file": "frontend/", "finding": "React app built to static files"}, {"file": "backend/Dockerfile", "finding": "CMD fastapi run (default port 8000, no PORT env)"}],
+      "notes": "Screen + API is recommendation-only today, and the DB layer is too. The fixed port 8000 would be the next blocker.",
+      "reviewed_by": null
+    },
+    {
+      "id": "socketio-chat", "repo": "socketio/chat-example", "commit": "07a183a618aea3e1c7f63c8d9bb1fcb78a1e99e8", "license": "MIT",
+      "category": "realtime-local-disk", "why": "the official socket.io chat tutorial; keeps chat history in a SQLite file",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": true, "large_payload": false, "in_memory_state": true,
+                   "non_http": false, "request_duration": null, "data": "OTHER", "multi_service": false, "port_env": "PORT", "spa_fallback": false},
+      "expected_outcome": {"blueprint": "container", "status": "UNSUPPORTED"},
+      "evidence": [{"file": "package.json", "finding": "express, socket.io, sqlite, sqlite3"}, {"file": "index.js", "finding": "open({filename: 'chat.db', driver: sqlite3.Database}); server.listen(process.env.PORT)"}],
+      "notes": "History must survive restarts on local disk -> needs a persistent volume.",
+      "reviewed_by": null
+    },
+    {
+      "id": "spring-rest", "repo": "spring-guides/gs-rest-service", "commit": "3f4cef01152596c19bc4d37939409358812b1421", "license": "Apache-2.0",
+      "category": "java-stateless", "why": "the Spring guide REST service; the app lives in complete/ (initial/ is the exercise)",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": false, "large_payload": false, "in_memory_state": false,
+                   "non_http": false, "request_duration": null, "data": "NONE", "multi_service": false, "port_env": "SERVER_PORT", "spa_fallback": false},
+      "expected_outcome": {"blueprint": "serverless", "status": "PROVISIONABLE"},
+      "evidence": [{"file": "complete/pom.xml", "finding": "spring-boot-starter-webmvc; no database"}],
+      "notes": "No Dockerfile: an image must be built first (e.g. spring-boot:build-image).",
+      "reviewed_by": null
+    },
+    {
+      "id": "wagtail-bakery", "repo": "wagtail/bakerydemo", "commit": "c9b38d7a7170dba8bb84254beb7e5dc5a955e024", "license": "BSD-3-Clause",
+      "category": "cms-db-media", "why": "Wagtail (Django) CMS demo: PostgreSQL in production, uploaded images on a volume",
+      "expected": {"app_form": "SERVER_APP", "realtime_connection": false, "large_payload": false, "in_memory_state": true,
+                   "non_http": false, "request_duration": null, "data": "POSTGRES", "multi_service": false, "port_env": "PORT", "spa_fallback": false},
+      "expected_outcome": {"blueprint": "container", "status": "RECOMMEND_ONLY"},
+      "evidence": [{"file": "requirements/base.txt", "finding": "Django, wagtail, dj-database-url, whitenoise"}, {"file": "requirements/production.txt", "finding": "psycopg, boto3"},
+                   {"file": "Dockerfile", "finding": "ENV PORT=8000; VOLUME media/images; CMD uwsgi"}, {"file": "etc/uwsgi.ini", "finding": "http-socket=:$(PORT)"}],
+      "reviewed_by": null
+    }
+  ]
+}
