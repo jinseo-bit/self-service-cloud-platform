@@ -144,7 +144,7 @@ Requirement {
 | 요청 시간: 1~2분 | — | ✗ | ✓ (origin timeout **120초** = quota 증설 없는 최대, ALB idle 130초) |
 | 요청 시간: 2분 넘게 | — | ✗ | ✗ → `UNSUP_REQUEST_OVER_120S` + 대안 `ALT_ASYNC_JOB`, `ALT_SPLIT_UNDER_2MIN` |
 | 요청/응답 6MB 초과 | — | ✗ `EXC_SLS_PAYLOAD` (Lambda 동기 호출 6MB) | ✓ |
-| 서버 메모리 상태 | — | ✗ `EXC_SLS_STATEFUL` (실행 환경 재사용이 보장되지 않음) | ✓ (task가 2개 이상이면 ALB stickiness + `WARN_STICKY_STATE`) |
+| 서버 메모리·로컬 디스크 상태 | — | ✗ `EXC_SLS_STATEFUL` (실행 환경 재사용이 보장되지 않음, `/tmp`는 요청 사이에 남는다는 보장이 없음) | ✓ (task가 2개 이상이면 ALB stickiness + `WARN_STICKY_STATE`) |
 | HTTP 외 프로토콜 | — | ✗ | ✗ → `UNSUP_NON_HTTP` |
 | `exposure = IP_ALLOWLIST` | ✓ (CloudFront + WAF IP set) | ✗ `EXC_SLS_IP_ALLOWLIST` (§4.2) | ✓ (CloudFront + WAF, ALB는 internal이라 우회 경로 없음) |
 | secret 보유 | ✗ `CONF_STATIC_SECRETS` | ✓ | ✓ |
@@ -607,3 +607,5 @@ Security는 **순위 요소가 아니다.** 모든 후보는 baseline을 포함�
 | P-08 | DB 판단이 모호하면 PostgreSQL 기본 + 경고 | 승인 |
 | P-09 | 완화안은 선호 입력(멈춤 허용도, 응답 민감도, 예산)만 대상 | 승인 |
 | P-10 | 기본 도메인 사용에 따른 TLS 예외 2건(security-baseline §9) | 승인 |
+
+> **생성 가능 범위(2026-10-05, D-165)**: 엔진 판단은 그대로이며, 생성 가능 여부(`provisionable`)만 `platform_core/blueprints.py`의 조합 `(frontend, compute, db)`으로 정한다: `(STATIC, NONE, NONE)` Static, `(NONE, SLS, NONE)` Serverless MVP. `in_memory_state` 입력은 로컬 디스크 상태까지 포함하도록 문구를 넓혔다(Lambda와 Fargate 모두 로컬 디스크는 영속되지 않지만, Lambda는 요청 사이에 실행 환경이 유지된다는 보장이 없음).

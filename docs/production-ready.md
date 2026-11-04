@@ -65,6 +65,8 @@
 | PR-L-05 | Security | + RDS: Lambda가 private subnet에 있고 SG가 DB만 허용 | STATE |
 | PR-L-06 | Operability | 재배포: 새 version을 alias로 전환. 검증에 실패하면 이전 version으로 alias를 되돌림 | STATE, HTTP |
 
+> **구현 상태(2026-10-05, D-165)**: Serverless MVP(DB 없음)의 실제 검사 목록은 `platform_core/production_ready.py`의 `SERVERLESS_CHECKS`(23개)다. ARTIFACT(IMG-REF·SB-SEC-02) → PLAN(PLAN-ALLOWLIST·SB-IAM-04·SB-PUB-06·SB-LOG-04·SB-PUB-09·SB-TAG-01 외) → STATE(PR-L-01~04, SB-IAM-01/02/04, SB-LOG-03/04, SB-PUB-06/07, SB-ENC-05, SB-LOG-01, 태그·TTL·PROD 알람) → HTTP(PR-ALL-02·PR-L-05 앱 직접 응답·PR-ALL-03 HTTPS only·PR-ALL-04 보안 헤더). 테스트가 목록의 모든 id가 실제로 계산되는지 확인한다.
+
 ## 6. Container
 
 | ID | 차원 | 검사 | 계층 |
@@ -76,6 +78,8 @@
 | PR-C-05 | Operability | deployment circuit breaker + rollback 활성 | STATE |
 | PR-C-06 | Cost | autoscaling min/max가 추천 출력과 일치 | STATE |
 | PR-C-07 | Security | `IP_ALLOWLIST`: 허용되지 않은 IP에서 403 | HTTP |
+
+> **구현 상태(2026-10-07, D-170)**: Container MVP(DB 없음)의 실제 검사 목록은 `platform_core/production_ready.py`의 `CONTAINER_CHECKS`(28개)다. PLAN은 환경 plan과 공유 인프라 plan을 함께 검사한다(SB-PUB-02/04는 공유 plan). PR-C-06은 autoscaling을 만들지 않는 MVP에서 "실행 개수 = 추천 최소값"을 검사한다(D-173). PR-C-02는 task의 public IP로 앱 포트에 직접 접속해 연결이 막히는지 실제로 확인한다.
 
 ## 7. Data
 

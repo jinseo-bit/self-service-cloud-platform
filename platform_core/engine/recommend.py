@@ -11,6 +11,7 @@ import dataclasses
 import math
 
 from .. import baseline
+from ..blueprints import PROVISIONABLE
 from ..pricing import PriceTable
 from . import constants as C
 from .cost import Candidate, CostEstimate, ctr_max_tasks, ctr_min_tasks, dollars, estimate, rds_class, uses_spot
@@ -416,7 +417,7 @@ def recommend(raw: RawInput, prices: PriceTable, *, allow_relax: bool = True) ->
             "scaling": dict(sorted(scaling.items())),
             "shared_dependencies": _shared(best),
         },
-        provisionable=(best.compute, best.db) in C.PROVISIONABLE,
+        provisionable=("STATIC" if req.has_frontend else "NONE", best.compute, best.db) in PROVISIONABLE,
         cost=_cost_block(est_rep, est_upper, budget_usd),
         budget=budget,
         reasons=[r.to_dict() for r in reasons],

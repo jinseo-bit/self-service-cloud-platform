@@ -29,7 +29,7 @@ MESSAGES = {
     "EXC_SLS_REALTIME": "실시간 연결(WebSocket 등)은 Lambda에서 유지할 수 없습니다.",
     "EXC_SLS_TIMEOUT": "30초 가까이 또는 그보다 오래 걸리는 요청은 Serverless 입구(API Gateway)의 30초 한도에 걸립니다.",
     "EXC_SLS_PAYLOAD": "6MB가 넘는 요청·응답은 Lambda에서 처리할 수 없습니다.",
-    "EXC_SLS_STATEFUL": "서버 메모리에 상태를 두는 앱은 Lambda에서 상태가 사라질 수 있습니다.",
+    "EXC_SLS_STATEFUL": "서버 메모리나 로컬 디스크에 상태를 두는 앱은 Lambda에서 요청 사이에 그 상태가 사라질 수 있습니다.",
     "EXC_SLS_IP_ALLOWLIST": ("특정 IP만 허용하려면 우회 경로가 없어야 하는데, "
                              "Serverless 구성은 기본 주소로 직접 접근하는 길을 막을 수 없습니다."),
     "EXC_SLS_COLD_START": "응답 속도가 중요해서 첫 요청이 1~2초 느려질 수 있는 구성은 제외합니다.",

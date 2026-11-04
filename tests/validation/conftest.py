@@ -36,6 +36,9 @@ provider "aws" {
 }
 """
 
+# Serverless has a single (Regional) provider, no us_east_1 alias to override.
+OFFLINE_OVERRIDE_SINGLE = OFFLINE_OVERRIDE.split('provider "aws" {\n  alias')[0]
+
 STATIC_VARS = {
     "env_id": "env-abcd1234", "account_id": "111122223333", "owner": "tester",
     "tier": "DEV", "expires_at": "2026-10-11T00:00:00Z", "log_bucket": "sscp-logs-111122223333",
@@ -102,3 +105,74 @@ def violating_plan(tmp_path_factory):
 def static_plan_prod(static_blueprint_dir, static_plan):
     v = {**STATIC_VARS, "tier": "PROD", "expires_at": "", "alert_email": "owner@example.com"}
     return offline_plan(static_blueprint_dir, v, out="plan_prod.bin")
+
+
+SERVERLESS_VARS = {
+    "env_id": "env-abcd1234", "account_id": "111122223333", "owner": "tester", "tier": "DEV",
+    "expires_at": "2026-10-11T00:00:00Z", "env_boundary_arn": "arn:aws:iam::111122223333:policy/sscp-env-boundary",
+    "image_uri": "111122223333.dkr.ecr.ap-northeast-2.amazonaws.com/sscp-env-abcd1234@sha256:" + "a" * 64,
+}
+
+
+@pytest.fixture(scope="session")
+def serverless_blueprint_dir(tmp_path_factory):
+    dst = tmp_path_factory.mktemp("bp-sls") / "infra"
+    shutil.copytree(ROOT / "infra", dst, ignore=shutil.ignore_patterns(".terraform", "*.tfstate*"))
+    bp = dst / "blueprints" / "serverless"
+    (bp / "offline_override.tf").write_text(OFFLINE_OVERRIDE_SINGLE)
+    return bp
+
+
+@pytest.fixture(scope="session")
+def serverless_plan(serverless_blueprint_dir):
+    return offline_plan(serverless_blueprint_dir, SERVERLESS_VARS)
+
+
+@pytest.fixture(scope="session")
+def serverless_plan_prod(serverless_blueprint_dir, serverless_plan):
+    v = {**SERVERLESS_VARS, "tier": "PROD", "expires_at": "", "alert_email": "owner@example.com"}
+    return offline_plan(serverless_blueprint_dir, v, out="plan_prod.bin")
+
+
+CONTAINER_VARS = {
+    "env_id": "env-abcd1234", "account_id": "111122223333", "owner": "tester", "tier": "DEV",
+    "expires_at": "2026-10-11T00:00:00Z", "log_bucket": "sscp-logs-111122223333",
+    "image_uri": "111122223333.dkr.ecr.ap-northeast-2.amazonaws.com/sscp-env-abcd1234@sha256:" + "a" * 64,
+    "env_boundary_arn": "arn:aws:iam::111122223333:policy/sscp-env-boundary", "listener_priority": 1234,
+    "capacity_provider": "FARGATE_SPOT", "desired_count": 1, "origin_read_timeout_s": 30,
+    "vpc_id": "vpc-0123456789abcdef0", "public_subnet_ids": ["subnet-0aaaaaaaaaaaaaaa1", "subnet-0aaaaaaaaaaaaaaa2"],
+    "alb_security_group_id": "sg-0bbbbbbbbbbbbbbb1", "alb_dns_name": "internal-sscp-shared-1.ap-northeast-2.elb.amazonaws.com",
+    "alb_arn_suffix": "app/sscp-shared/0123456789abcdef",
+    "listener_arn": "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:listener/app/sscp-shared/0123456789abcdef/fedcba9876543210",
+    "cluster_name": "sscp-shared", "vpc_origin_id": "vo_0123456789abcdefghijkl",
+}
+
+SHARED_CONTAINER_VARS = {"owner": "tester", "cloudfront_prefix_list_id": "pl-22a6434b"}
+
+
+@pytest.fixture(scope="session")
+def container_blueprint_dir(tmp_path_factory):
+    dst = tmp_path_factory.mktemp("bp-ctr") / "infra"
+    shutil.copytree(ROOT / "infra", dst, ignore=shutil.ignore_patterns(".terraform", "*.tfstate*"))
+    bp = dst / "blueprints" / "container"
+    (bp / "offline_override.tf").write_text(OFFLINE_OVERRIDE)
+    shared = dst / "shared" / "container"
+    (shared / "offline_override.tf").write_text(OFFLINE_OVERRIDE_SINGLE)
+    return bp
+
+
+@pytest.fixture(scope="session")
+def container_plan(container_blueprint_dir):
+    return offline_plan(container_blueprint_dir, CONTAINER_VARS)
+
+
+@pytest.fixture(scope="session")
+def container_plan_prod_allowlist(container_blueprint_dir, container_plan):
+    v = {**CONTAINER_VARS, "tier": "PROD", "expires_at": "", "alert_email": "owner@example.com", "desired_count": 2,
+         "capacity_provider": "FARGATE", "origin_read_timeout_s": 120, "ip_allowlist": ["203.0.113.0/24"]}
+    return offline_plan(container_blueprint_dir, v, out="plan_prod.bin")
+
+
+@pytest.fixture(scope="session")
+def shared_container_plan(container_blueprint_dir):
+    return offline_plan(container_blueprint_dir.parents[1] / "shared" / "container", SHARED_CONTAINER_VARS)

@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" font-family="'Malgun Gothic','Noto Sans KR',sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1F9E8F"/></marker>
+    <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#3B6FD8"/></marker>
+    <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8A8F94"/></marker>
+  </defs>
+  <rect width="1600" height="900" fill="#FFFFFF"/>
+
+  <!-- title + legend -->
+  <text x="40" y="58" font-size="30" font-weight="700" fill="#1B2329">Container Blueprint 구조</text>
+  <text x="40" y="92" font-size="16" fill="#5E6B71">환경 A와 환경 B가 내부 ALB 하나를 함께 쓰는 모습</text>
+  <rect x="1040" y="36" width="22" height="16" rx="3" fill="#E3F4F1" stroke="#1F9E8F" stroke-width="2"/>
+  <text x="1072" y="50" font-size="15" fill="#1B2329">환경마다 새로 생성</text>
+  <rect x="1240" y="36" width="22" height="16" rx="3" fill="#FDF3E3" stroke="#D08A1E" stroke-width="2" stroke-dasharray="5 3"/>
+  <text x="1272" y="50" font-size="15" fill="#1B2329">공유 (첫 환경이 만들고 마지막 환경이 삭제)</text>
+
+  <!-- users -->
+  <g font-size="16" fill="#1B2329" text-anchor="middle">
+    <circle cx="95" cy="250" r="18" fill="#1F9E8F"/><rect x="70" y="272" width="50" height="34" rx="14" fill="#1F9E8F"/>
+    <text x="95" y="332" font-weight="700">사용자</text><text x="95" y="352" font-size="13" fill="#5E6B71">환경 A 주소로 접속</text>
+    <circle cx="95" cy="550" r="18" fill="#3B6FD8"/><rect x="70" y="572" width="50" height="34" rx="14" fill="#3B6FD8"/>
+    <text x="95" y="632" font-weight="700">사용자</text><text x="95" y="652" font-size="13" fill="#5E6B71">환경 B 주소로 접속</text>
+  </g>
+
+  <!-- CloudFront per env -->
+  <g>
+    <rect x="200" y="225" width="250" height="110" rx="12" fill="#E3F4F1" stroke="#1F9E8F" stroke-width="2"/>
+    <text x="325" y="257" font-size="17" font-weight="700" text-anchor="middle" fill="#1B2329">CloudFront (환경 A)</text>
+    <text x="325" y="282" font-size="13" text-anchor="middle" fill="#40494E">HTTPS · 보안 헤더</text>
+    <text x="325" y="304" font-size="13" text-anchor="middle" fill="#40494E">헤더 추가: X-Sscp-Env = env-A</text>
+    <text x="325" y="325" font-size="12" text-anchor="middle" fill="#5E6B71">…cloudfront.net (유일한 입구)</text>
+
+    <rect x="200" y="525" width="250" height="110" rx="12" fill="#E3F4F1" stroke="#1F9E8F" stroke-width="2"/>
+    <text x="325" y="557" font-size="17" font-weight="700" text-anchor="middle" fill="#1B2329">CloudFront (환경 B)</text>
+    <text x="325" y="582" font-size="13" text-anchor="middle" fill="#40494E">HTTPS · 보안 헤더</text>
+    <text x="325" y="604" font-size="13" text-anchor="middle" fill="#40494E">헤더 추가: X-Sscp-Env = env-B</text>
+    <text x="325" y="625" font-size="12" text-anchor="middle" fill="#5E6B71">…cloudfront.net (유일한 입구)</text>
+  </g>
+
+  <!-- VPC -->
+  <rect x="510" y="120" width="1060" height="680" rx="16" fill="#F7F9FA" stroke="#9AA5AB" stroke-width="2"/>
+  <text x="532" y="150" font-size="16" font-weight="700" fill="#40494E">VPC (공유) · 서울 리전 · NAT Gateway 없음</text>
+
+  <!-- VPC origin -->
+  <rect x="540" y="380" width="165" height="110" rx="12" fill="#FDF3E3" stroke="#D08A1E" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="622" y="415" font-size="16" font-weight="700" text-anchor="middle" fill="#1B2329">VPC origin</text>
+  <text x="622" y="440" font-size="13" text-anchor="middle" fill="#40494E">CloudFront →</text>
+  <text x="622" y="460" font-size="13" text-anchor="middle" fill="#40494E">VPC 안 AWS 내부 연결</text>
+
+  <!-- private subnets + ALB -->
+  <rect x="735" y="170" width="300" height="610" rx="12" fill="#EEF1F3" stroke="#B7C0C5" stroke-width="1.5"/>
+  <text x="755" y="198" font-size="15" font-weight="700" fill="#40494E">비공개 서브넷 ×2 (AZ 2곳)</text>
+  <rect x="760" y="290" width="250" height="290" rx="12" fill="#FDF3E3" stroke="#D08A1E" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="885" y="325" font-size="18" font-weight="700" text-anchor="middle" fill="#1B2329">내부 ALB</text>
+  <text x="885" y="350" font-size="13" text-anchor="middle" fill="#40494E">인터넷 주소 없음</text>
+  <text x="885" y="370" font-size="13" text-anchor="middle" fill="#40494E">SG: CloudFront에서 온 요청만</text>
+  <rect x="780" y="395" width="210" height="160" rx="8" fill="#FFFFFF" stroke="#E1C38F"/>
+  <text x="885" y="420" font-size="13" font-weight="700" text-anchor="middle" fill="#1B2329">규칙: 헤더로 환경 구분</text>
+  <text x="795" y="452" font-size="13" fill="#1F9E8F" font-weight="700">env-A → 대상 그룹 A</text>
+  <text x="795" y="480" font-size="13" fill="#3B6FD8" font-weight="700">env-B → 대상 그룹 B</text>
+  <text x="795" y="512" font-size="12" fill="#5E6B71">규칙·대상 그룹은 환경마다,</text>
+  <text x="795" y="532" font-size="12" fill="#5E6B71">ALB 자체는 하나</text>
+
+  <!-- public subnets + ECS -->
+  <rect x="1070" y="170" width="480" height="610" rx="12" fill="#EEF1F3" stroke="#B7C0C5" stroke-width="1.5"/>
+  <text x="1090" y="198" font-size="15" font-weight="700" fill="#40494E">공개 서브넷 ×2 (컨테이너용)</text>
+  <rect x="1090" y="215" width="300" height="470" rx="12" fill="none" stroke="#D08A1E" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="1108" y="242" font-size="14" font-weight="700" fill="#9A6412">ECS 클러스터 (공유)</text>
+
+  <rect x="1110" y="260" width="260" height="120" rx="12" fill="#E3F4F1" stroke="#1F9E8F" stroke-width="2"/>
+  <text x="1240" y="292" font-size="17" font-weight="700" text-anchor="middle" fill="#1B2329">Fargate 컨테이너 (환경 A)</text>
+  <text x="1240" y="318" font-size="13" text-anchor="middle" fill="#40494E">go-httpbin · 포트 8080</text>
+  <text x="1240" y="340" font-size="13" text-anchor="middle" fill="#40494E">공인 IP 있음</text>
+  <text x="1240" y="362" font-size="13" text-anchor="middle" fill="#40494E">SG: ALB에서 온 요청만</text>
+
+  <rect x="1110" y="545" width="260" height="120" rx="12" fill="#E3F4F1" stroke="#1F9E8F" stroke-width="2"/>
+  <text x="1240" y="577" font-size="17" font-weight="700" text-anchor="middle" fill="#1B2329">Fargate 컨테이너 (환경 B)</text>
+  <text x="1240" y="603" font-size="13" text-anchor="middle" fill="#40494E">다른 앱 image · 포트 8080</text>
+  <text x="1240" y="625" font-size="13" text-anchor="middle" fill="#40494E">공인 IP 있음</text>
+  <text x="1240" y="647" font-size="13" text-anchor="middle" fill="#40494E">SG: ALB에서 온 요청만</text>
+
+  <!-- outbound -->
+  <rect x="1405" y="385" width="130" height="120" rx="10" fill="#FFFFFF" stroke="#9AA5AB" stroke-width="1.5"/>
+  <text x="1470" y="415" font-size="13" font-weight="700" text-anchor="middle" fill="#40494E">나가는 연결만</text>
+  <text x="1470" y="440" font-size="12" text-anchor="middle" fill="#5E6B71">ECR (image)</text>
+  <text x="1470" y="460" font-size="12" text-anchor="middle" fill="#5E6B71">CloudWatch 로그</text>
+  <text x="1470" y="480" font-size="12" text-anchor="middle" fill="#5E6B71">외부 API</text>
+  <path d="M1370 320 C1395 320 1395 410 1403 410" fill="none" stroke="#8A8F94" stroke-width="1.8" stroke-dasharray="4 3" marker-end="url(#g)"/>
+  <path d="M1370 605 C1395 605 1395 480 1403 480" fill="none" stroke="#8A8F94" stroke-width="1.8" stroke-dasharray="4 3" marker-end="url(#g)"/>
+
+  <!-- request paths -->
+  <g fill="none" stroke-width="3">
+    <path d="M125 290 L196 285" stroke="#1F9E8F" marker-end="url(#a)"/>
+    <path d="M450 280 C500 280 500 410 536 410" stroke="#1F9E8F" marker-end="url(#a)"/>
+    <path d="M705 410 L756 410" stroke="#1F9E8F" marker-end="url(#a)"/>
+    <path d="M1010 452 C1060 452 1060 320 1106 320" stroke="#1F9E8F" marker-end="url(#a)"/>
+
+    <path d="M125 590 L196 585" stroke="#3B6FD8" marker-end="url(#b)"/>
+    <path d="M450 580 C500 580 500 460 536 460" stroke="#3B6FD8" marker-end="url(#b)"/>
+    <path d="M705 460 L756 460" stroke="#3B6FD8" marker-end="url(#b)"/>
+    <path d="M1010 480 C1060 480 1060 605 1106 605" stroke="#3B6FD8" marker-end="url(#b)"/>
+  </g>
+
+  <!-- blocked paths -->
+  <g font-size="15">
+    <circle cx="552" cy="838" r="13" fill="#C8553D"/><text x="552" y="844" text-anchor="middle" fill="#FFFFFF" font-weight="700">✕</text>
+    <text x="574" y="844" fill="#1B2329">인터넷 → 내부 ALB 직접 접속 <tspan font-weight="700">불가</tspan> (주소가 없음)</text>
+    <circle cx="1002" cy="838" r="13" fill="#C8553D"/><text x="1002" y="844" text-anchor="middle" fill="#FFFFFF" font-weight="700">✕</text>
+    <text x="1024" y="844" fill="#1B2329">인터넷 → 컨테이너 공인 IP 직접 접속 <tspan font-weight="700">불가</tspan> (SG가 막음)</text>
+    <text x="40" y="844" fill="#5E6B71" font-size="14">들어오는 길은 CloudFront 하나뿐</text>
+  </g>
+</svg>

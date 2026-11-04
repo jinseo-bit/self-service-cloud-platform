@@ -19,7 +19,8 @@ EXTRA = {
     "aws_secret_assignment": re.compile(rb"aws_secret_access_key\s*[=:]\s*['\"]?[A-Za-z0-9/+]{40}"),
 }
 # Test fixtures intentionally contain a fake key to prove the scanner works.
-ALLOW = {"tests/validation/test_artifact_and_coverage.py", "tests/control_plane/test_api_flow.py", "tests/ui/test_ui_flow.py"}
+ALLOW = {"tests/validation/test_artifact_and_coverage.py", "tests/control_plane/test_api_flow.py", "tests/ui/test_ui_flow.py",
+         "tests/validation/test_serverless.py"}
 SKIP_DIRS = {".venv", "venv", ".git", ".terraform", ".terraform-plugin-cache", "build", "__pycache__", "references",
              "vendor", ".pytest_cache"}
 

@@ -62,8 +62,7 @@ COMPLEXITY = {
     "DB_NONE": 0, "DDB": 1, "RDS_SAZ": 2, "AUR_PAUSE": 3, "RDS_MAZ": 4, "AUR_MAZ": 5,
 }
 
-# Blueprints that the platform can actually provision right now (D-120 vertical slice).
-PROVISIONABLE = {("NONE", "NONE")}  # (compute, db) with STATIC frontend
+# Blueprints that the platform can actually provision live in platform_core/blueprints.py (D-165).
 
 # D-157 front-door timeouts (AWS docs checked 2026-10-04)
 APIGW_HTTP_TIMEOUT_S = 30          # HTTP API integration timeout, hard limit

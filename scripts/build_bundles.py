@@ -32,4 +32,4 @@ def build(name: str, trees: list[str]) -> None:
 
 if __name__ == "__main__":
     build("lambda.zip", ["control_plane", "platform_core"])
-    build("runner.zip", ["runner", "control_plane", "platform_core", "infra/modules", "infra/blueprints"])
+    build("runner.zip", ["runner", "control_plane", "platform_core", "infra/modules", "infra/blueprints", "infra/shared"])

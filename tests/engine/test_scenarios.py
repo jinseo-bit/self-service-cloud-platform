@@ -314,11 +314,20 @@ def test_no_nat_gateway_or_eks_anywhere():
         assert "NAT" not in blob.upper().replace("ALTERNAT", "")
 
 
-def test_only_static_is_provisionable_in_vertical_slice():
+def test_provisionable_blueprints_are_static_serverless_and_container_without_db():
+    """D-165, D-170: Static, Serverless and Container (HTTP app, no data layer) can be created; everything else stays
+    recommendation-only."""
     assert run(app_form="STATIC_SITE")["provisionable"] is True
-    r = run()
-    assert r["provisionable"] is False
-    assert "UNSUP_BLUEPRINT_NOT_YET" in codes(r["warnings"])
+    sls = run(app_form="SERVER_APP", traffic_scale="T1", traffic_pattern="IDLE_MOSTLY", budget_usd_month=10)
+    assert sls["architecture"]["candidate_id"] == "SLS+NONE" and sls["provisionable"] is True
+    assert "UNSUP_BLUEPRINT_NOT_YET" not in codes(sls["warnings"])
+    ctr = run(app_form="SERVER_APP", traffic_scale="T1", capabilities={"realtime_connection": True}, budget_usd_month=100)
+    assert ctr["architecture"]["candidate_id"] == "CTR+NONE" and ctr["provisionable"] is True
+    for kw in ({"data": {"needed": True, "declared": "DYNAMODB"}},
+               {"latency_sensitivity": "SENSITIVE"}, {"app_form": "STATIC_PLUS_API"}):
+        r = run(**{"app_form": "SERVER_APP", "traffic_scale": "T1", "traffic_pattern": "IDLE_MOSTLY", "budget_usd_month": 100, **kw})
+        assert r["provisionable"] is False, (kw, r["architecture"])
+        assert "UNSUP_BLUEPRINT_NOT_YET" in codes(r["warnings"])
 
 
 def test_pricing_metadata_is_reported():

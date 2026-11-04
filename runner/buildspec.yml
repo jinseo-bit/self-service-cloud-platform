@@ -3,6 +3,8 @@ version: 0.2
 env:
   variables:
     TF_VERSION: "1.15.7"
+    CRANE_VERSION: "v0.20.2"
+    LWA_IMAGE: "public.ecr.aws/awsguru/aws-lambda-adapter:0.8.4"
     TF_PLUGIN_CACHE_DIR: "/root/.terraform.d/plugin-cache"
 
 phases:
@@ -13,6 +15,11 @@ phases:
       - curl -fsSLo /tmp/tf.sums "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_SHA256SUMS"
       - (cd /tmp && grep "linux_amd64.zip" tf.sums | sed "s/terraform_${TF_VERSION}_linux_amd64.zip/tf.zip/" | sha256sum -c -)
       - unzip -o -q /tmp/tf.zip -d /usr/local/bin && terraform version
+      # crane builds the Serverless derived image registry-to-registry (no Docker daemon, unprivileged build)
+      - curl -fsSLo /tmp/crane.tgz "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+      - curl -fsSLo /tmp/crane.sums "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/checksums.txt"
+      - (cd /tmp && grep " go-containerregistry_Linux_x86_64.tar.gz$" crane.sums | sed "s/go-containerregistry_Linux_x86_64.tar.gz/crane.tgz/" | sha256sum -c -)
+      - tar -xzf /tmp/crane.tgz -C /usr/local/bin crane && crane version
       - python3 -m pip install --quiet "boto3>=1.35"
   build:
     commands:

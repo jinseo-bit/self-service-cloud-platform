@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -116,3 +118,99 @@ def check_served_revision(*, base_url: str, expected_sha256: str | None, revisio
         if i < attempts - 1:
             time.sleep(delay)
     return _r("PR-S-03", "Operability", False, f"served index.html does not match rev-{revision} ({str(got)[:16]})")
+
+
+# ---------------------------------------------------------------- Serverless (D-165)
+
+def validate_serverless_http(*, base_url: str, health_path: str = "/", attempts: int = 20, delay: float = 6) -> list[CheckResult]:
+    """base_url: https://<api-id>.execute-api.<region>.amazonaws.com — the HTTP API's own HTTPS endpoint."""
+    out: list[CheckResult] = []
+    url = base_url.rstrip("/") + health_path
+    t0 = time.monotonic()
+    resp = _get_until(url, 200, attempts, delay)  # first request includes the cold start
+    took = time.monotonic() - t0
+    ok = resp is not None and resp.status == 200
+    status = getattr(resp, "status", "no response")
+    out.append(_r("PR-ALL-02", "Reachability", ok, f"GET {health_path} -> {status} ({took:.1f}s incl. cold start)"))
+
+    # The app itself answered: not an API Gateway / Lambda Web Adapter error page.
+    gw_error = resp is not None and ("x-amzn-errortype" in resp.headers or resp.body.strip() in
+                                     (b'{"message":"Internal Server Error"}', b'{"message":"Service Unavailable"}'))
+    out.append(_r("PR-L-05", "Reachability", ok and not gw_error and len(resp.body) > 0,
+                  f"app response {len(resp.body) if resp else 0} bytes" if ok and not gw_error else
+                  f"gateway/adapter error: {resp.headers.get('x-amzn-errortype') if resp else 'no response'}"))
+
+    # SB-TLS-02: execute-api serves HTTPS only; a plain-HTTP request must not get a page.
+    h = fetch(base_url.replace("https://", "http://", 1).rstrip("/") + health_path, timeout=5)
+    https_only = h.status == 0 or (h.status in (301, 302, 307, 308) and h.headers.get("location", "").startswith("https://"))
+    out.append(_r("PR-ALL-03", "Security", https_only, f"http -> {h.status or 'no HTTP listener'}", "SB-TLS-02"))
+
+    if resp is not None and resp.status:
+        missing = [x for x in REQUIRED_HEADERS if x not in resp.headers]
+        out.append(_r("PR-ALL-04", "Security", not missing, f"missing headers {missing}" if missing else "security headers present"))
+    else:
+        out.append(_r("PR-ALL-04", "Security", False, "no HTTPS response to inspect"))
+    return out
+
+
+def _resolves_private_only(host: str) -> tuple[bool, str]:
+    """PR-C-01: an internal ALB's DNS name has only private addresses (or none) — nothing public to connect to."""
+    try:
+        addrs = {a[4][0] for a in socket.getaddrinfo(host, 80, proto=socket.IPPROTO_TCP)}
+    except OSError:
+        return True, "does not resolve from the internet"
+    public = sorted(a for a in addrs if not ipaddress.ip_address(a).is_private)
+    return not public, f"public addresses {public}" if public else f"private addresses only ({len(addrs)})"
+
+
+def _port_closed(ip: str, port: int, timeout: float) -> bool:
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return False
+    except OSError:
+        return True
+
+
+def validate_container_http(*, base_url: str, health_path: str = "/", alb_dns_name: str = "", task_public_ips=(),
+                            app_port: int = 8080, ip_allowlist=(), attempts: int = 20, delay: float = 15,
+                            connect_timeout: float = 3) -> list[CheckResult]:
+    """base_url: https://<distribution>.cloudfront.net — CloudFront → VPC origin → internal ALB → Fargate (D-33)."""
+    out: list[CheckResult] = []
+    url = base_url.rstrip("/") + health_path
+    if ip_allowlist:
+        # SB-PUB-08 / PR-C-07: this checker is not on the allowlist, so the edge must refuse it.
+        resp = _get_until(url, 403, attempts, delay)
+        blocked = resp is not None and resp.status == 403
+        out.append(_r("PR-C-07", "Security", blocked, f"non-allowlisted request -> {getattr(resp, 'status', 'no response')}",
+                      "SB-PUB-08"))
+        out.append(_r("PR-ALL-02", "Reachability", True, "allowlisted environment: reachability is checked from allowed IPs only",
+                      status=NOT_APPLICABLE))
+    else:
+        out.append(_r("PR-C-07", "Security", True, "public exposure", "SB-PUB-08", status=NOT_APPLICABLE))
+        resp = _get_until(url, 200, attempts, delay)  # a new distribution and new tasks take a moment
+        ok = resp is not None and resp.status == 200
+        # The app answered: not a CloudFront error page, and not the shared ALB's "no environment" default.
+        edge_error = resp is not None and ("error" in resp.headers.get("x-cache", "").lower() or resp.body.strip() == b"no environment")
+        detail = f"GET {health_path} -> {getattr(resp, 'status', 'no response')}"
+        out.append(_r("PR-ALL-02", "Reachability", ok and not edge_error,
+                      detail + (" (edge/ALB default response, not the app)" if ok and edge_error else "")))
+
+    h = fetch(base_url.replace("https://", "http://", 1).rstrip("/") + health_path, timeout=5)
+    redirect = h.status in (301, 302, 307, 308) and h.headers.get("location", "").startswith("https://")
+    out.append(_r("PR-ALL-03", "Security", redirect, f"http -> {h.status} {h.headers.get('location', '')[:60]}", "SB-TLS-01"))
+
+    if resp is not None and resp.status:
+        missing = [x for x in REQUIRED_HEADERS if x not in resp.headers]
+        out.append(_r("PR-ALL-04", "Security", not missing, f"missing headers {missing}" if missing else "security headers present",
+                      "SB-TLS-05"))
+    else:
+        out.append(_r("PR-ALL-04", "Security", False, "no HTTPS response to inspect", "SB-TLS-05"))
+
+    ok, detail = _resolves_private_only(alb_dns_name) if alb_dns_name else (False, "ALB DNS name unknown")
+    out.append(_r("PR-C-01", "Security", ok, f"ALB {detail}", "SB-PUB-02"))
+
+    open_ips = [ip for ip in task_public_ips if not _port_closed(ip, app_port, connect_timeout)]
+    out.append(_r("PR-C-02", "Security", not open_ips,
+                  f"app port reachable directly on {open_ips}" if open_ips else
+                  f"{len(task_public_ips)} task public IP(s): app port {app_port} not reachable from the internet", "SB-PUB-03"))
+    return out

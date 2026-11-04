@@ -41,7 +41,8 @@ def test_override_cannot_bypass_unsupported_or_unprovisionable():
     unsupported = recommend(RawInput.from_dict({**STATIC, "app_form": "SERVER_APP", "traffic_scale": "T1",
                                                 "capabilities": {"request_duration": "OVER_120S"}}), P)
     assert admit(unsupported, owner_envs=[], all_envs=[], env_id="e", budget_override=True)
-    server = recommend(RawInput.from_dict({**STATIC, "app_form": "SERVER_APP", "traffic_scale": "T1", "budget_usd_month": 0}), P)
+    server = recommend(RawInput.from_dict({**STATIC, "app_form": "SERVER_APP", "traffic_scale": "T1", "budget_usd_month": 0,
+                                            "data": {"needed": True, "declared": "DYNAMODB"}}), P)  # data layer: recommendation-only
     assert "UNSUP_BLUEPRINT_NOT_YET" in codes(admit(server, owner_envs=[], all_envs=[], env_id="e", budget_override=True))
 
 

@@ -16,11 +16,12 @@ SECURE_VIEWER = ("redirect-to-https", "https-only")
 
 
 def _resources(plan: dict) -> list[dict]:
-    """Resources being created or updated, with their planned values."""
+    """Every resource of the configuration after apply, with its planned values. Unchanged (no-op) resources are part
+    of the final configuration too: a later plan (Serverless after the ECR-only apply, a retry) must still check them."""
     out = []
     for rc in plan.get("resource_changes", []):
         actions = rc.get("change", {}).get("actions", [])
-        if actions in (["delete"], ["no-op"], ["read"]):
+        if actions in (["delete"], ["read"]):
             continue
         out.append({
             "address": rc["address"],
@@ -272,7 +273,201 @@ def check_log_retention(res) -> CheckResult:
               f"log groups without retention: {bad}" if bad else "retention set", "SB-LOG-04")
 
 
-def validate_plan(plan: dict, *, ip_allowlist: list[str] | None = None) -> list[CheckResult]:
+# ---------------------------------------------------------------- Serverless (D-165)
+
+# Resource types each blueprint may create (D-70 "허용 리소스 상한"). Anything else blocks apply.
+ALLOWED_TYPES = {
+    "static": {
+        "aws_s3_bucket", "aws_s3_bucket_public_access_block", "aws_s3_bucket_ownership_controls",
+        "aws_s3_bucket_server_side_encryption_configuration", "aws_s3_bucket_policy",
+        "aws_cloudfront_distribution", "aws_cloudfront_origin_access_control", "aws_wafv2_ip_set", "aws_wafv2_web_acl",
+        "aws_sns_topic", "aws_sns_topic_subscription", "aws_cloudwatch_metric_alarm", "aws_cloudwatch_dashboard",
+    },
+    "serverless": {
+        "aws_ecr_repository", "aws_ecr_lifecycle_policy", "aws_ecr_repository_policy",
+        "aws_iam_role", "aws_iam_role_policy", "aws_lambda_function", "aws_lambda_permission",
+        "aws_cloudwatch_log_group", "aws_apigatewayv2_api", "aws_apigatewayv2_integration", "aws_apigatewayv2_route",
+        "aws_apigatewayv2_stage", "aws_sns_topic", "aws_sns_topic_subscription", "aws_cloudwatch_metric_alarm",
+    },
+    "container": {
+        "aws_ecr_repository", "aws_ecr_lifecycle_policy", "aws_cloudwatch_log_group", "aws_iam_role", "aws_iam_role_policy",
+        "aws_security_group", "aws_vpc_security_group_ingress_rule", "aws_vpc_security_group_egress_rule",
+        "aws_lb_target_group", "aws_lb_listener_rule", "aws_ecs_task_definition", "aws_ecs_service",
+        "aws_cloudfront_distribution", "aws_wafv2_ip_set", "aws_wafv2_web_acl",
+        "aws_sns_topic", "aws_sns_topic_subscription", "aws_cloudwatch_metric_alarm",
+    },
+    "container-shared": {
+        "aws_vpc", "aws_internet_gateway", "aws_subnet", "aws_route_table", "aws_route_table_association", "aws_vpc_endpoint",
+        "aws_security_group", "aws_vpc_security_group_ingress_rule", "aws_vpc_security_group_egress_rule",
+        "aws_lb", "aws_lb_listener", "aws_cloudfront_vpc_origin", "aws_ecs_cluster", "aws_ecs_cluster_capacity_providers",
+    },
+}
+
+
+def check_allowed_types(res, blueprint: str) -> CheckResult:
+    allowed = ALLOWED_TYPES[blueprint]
+    bad = sorted({r["type"] for r in res if r["type"] not in allowed})
+    return _r("PLAN-ALLOWLIST", "Cost", FAIL if bad else PASS,
+              f"resource types outside the {blueprint} blueprint: {bad}" if bad else f"only {blueprint} blueprint resource types")
+
+
+def check_role_boundary(res) -> CheckResult:
+    roles = _by_type(res, "aws_iam_role")
+    if not roles:
+        return _r("SB-IAM-04", "Security", NOT_APPLICABLE, "no IAM roles", "SB-IAM-04")
+    bad = [r["address"] for r in roles if not r["after"].get("permissions_boundary") and not r["unknown"].get("permissions_boundary")]
+    return _r("SB-IAM-04", "Security", FAIL if bad else PASS,
+              f"roles without permissions boundary: {bad}" if bad else "permissions boundary on every role", "SB-IAM-04")
+
+
+def check_lambda_env_secrets(res) -> CheckResult:
+    from .artifact import SECRET_PATTERNS
+    from .image import SECRET_KEY
+    fns = _by_type(res, "aws_lambda_function")
+    if not fns:
+        return _r("SB-SEC-02", "Security", NOT_APPLICABLE, "no functions", "SB-SEC-02")
+    hits = []
+    for f in fns:
+        variables = ((f["after"].get("environment") or [{}])[0] or {}).get("variables") or {}
+        for k, v in variables.items():
+            if SECRET_KEY.search(k) or any(rx.search(str(v).encode()) for rx in SECRET_PATTERNS.values()):
+                hits.append(f"{f['address']}:{k}")
+    return _r("SB-SEC-02", "Security", FAIL if hits else PASS,
+              f"plaintext secret-like environment variables {hits}" if hits else "no plaintext secrets in environment", "SB-SEC-02")
+
+
+def check_api_access_log(res) -> CheckResult:
+    stages = _by_type(res, "aws_apigatewayv2_stage")
+    if not stages:
+        return _r("SB-LOG-03", "Security", NOT_APPLICABLE, "no API stages", "SB-LOG-03")
+    bad = [s["address"] for s in stages if not (s["after"].get("access_log_settings") or s["unknown"].get("access_log_settings"))]
+    return _r("SB-LOG-03", "Security", FAIL if bad else PASS,
+              f"stages without access log: {bad}" if bad else "API access log configured", "SB-LOG-03")
+
+
+def check_ecr(res) -> list[CheckResult]:
+    repos = _by_type(res, "aws_ecr_repository")
+    if not repos:
+        return [_r("SB-PUB-07", "Security", NOT_APPLICABLE, "no ECR repositories", "SB-PUB-07")]
+    no_scan = [r["address"] for r in repos if not ((r["after"].get("image_scanning_configuration") or [{}])[0] or {}).get("scan_on_push")]
+    mutable = [r["address"] for r in repos if r["after"].get("image_tag_mutability") != "IMMUTABLE"]
+    out = [_r("SB-PUB-07", "Security", FAIL if no_scan else PASS,
+              f"scan on push disabled: {no_scan}" if no_scan else "private repository, scan on push", "SB-PUB-07")]
+    out.append(_r("SB-PUB-07/immutable", "Security", FAIL if mutable else PASS,
+                  f"mutable tags: {mutable}" if mutable else "image tags are immutable", "SB-PUB-07"))
+    return out
+
+
+def check_lambda_invoke_scope(res) -> CheckResult:
+    perms = _by_type(res, "aws_lambda_permission")
+    if not perms:
+        return _r("SB-PUB-06/permission", "Security", NOT_APPLICABLE, "no invoke permissions", "SB-PUB-06")
+    bad = [p["address"] for p in perms if p["after"].get("principal") != "apigateway.amazonaws.com"
+           or not (p["after"].get("source_arn") or p["unknown"].get("source_arn"))]
+    return _r("SB-PUB-06/permission", "Security", FAIL if bad else PASS,
+              f"invoke permission not limited to this API: {bad}" if bad else "only this API can invoke the function", "SB-PUB-06")
+
+
+# ---------------------------------------------------------------- Container (D-33, D-44, D-170)
+
+def _ingress_rules(res) -> list[tuple[str, dict]]:
+    """(address, rule) for every ingress rule, inline or standalone."""
+    out = [(sg["address"], rule) for sg in _by_type(res, "aws_security_group") for rule in sg["after"].get("ingress") or []]
+    return out + [(r["address"], r["after"]) for r in _by_type(res, "aws_vpc_security_group_ingress_rule")]
+
+
+def check_alb_internal(res) -> CheckResult:
+    lbs = _by_type(res, "aws_lb")
+    if not lbs:
+        return _r("SB-PUB-02", "Security", NOT_APPLICABLE, "no load balancers in this plan", "SB-PUB-02")
+    bad = [lb["address"] for lb in lbs if lb["after"].get("internal") is not True]
+    return _r("SB-PUB-02", "Security", FAIL if bad else PASS,
+              f"internet-facing load balancers: {bad}" if bad else "internal ALB only", "SB-PUB-02")
+
+
+def check_alb_ingress(res) -> CheckResult:
+    """The shared ALB accepts traffic only from the CloudFront origin-facing prefix list (VPC origin)."""
+    if not _by_type(res, "aws_lb"):
+        return _r("SB-PUB-04", "Security", NOT_APPLICABLE, "no load balancers in this plan", "SB-PUB-04")
+    bad = [addr for addr, rule in _ingress_rules(res) if not (rule.get("prefix_list_id") or rule.get("prefix_list_ids"))]
+    return _r("SB-PUB-04", "Security", FAIL if bad else PASS,
+              f"ALB-side ingress not limited to CloudFront: {bad}" if bad else "ingress only from the CloudFront prefix list",
+              "SB-PUB-04")
+
+
+def check_task_ingress(res) -> CheckResult:
+    """Task security groups accept only the ALB's security group, on the app port (public IP, no internet inbound)."""
+    if not _by_type(res, "aws_ecs_service"):
+        return _r("SB-PUB-03", "Security", NOT_APPLICABLE, "no ECS services in this plan", "SB-PUB-03")
+    bad = []
+    for addr, rule in _ingress_rules(res):
+        source = rule.get("referenced_security_group_id") or rule.get("security_groups")
+        if not source or rule.get("cidr_ipv4") or rule.get("cidr_blocks") or rule.get("from_port") != rule.get("to_port"):
+            bad.append(addr)
+    return _r("SB-PUB-03", "Security", FAIL if bad else PASS,
+              f"task ingress not limited to the ALB on one port: {bad}" if bad else "task ingress only from the ALB on the app port",
+              "SB-PUB-03")
+
+
+def check_container_env_secrets(res) -> CheckResult:
+    from .artifact import SECRET_PATTERNS
+    from .image import SECRET_KEY
+    tds = _by_type(res, "aws_ecs_task_definition")
+    if not tds:
+        return _r("SB-SEC-02", "Security", NOT_APPLICABLE, "no task definitions", "SB-SEC-02")
+    hits, deferred = [], []
+    for td in tds:
+        raw = td["after"].get("container_definitions")
+        if raw is None:
+            deferred.append(td["address"])
+            continue
+        for c in json.loads(raw) if isinstance(raw, str) else raw:
+            if c.get("secrets"):
+                hits.append(f"{td['address']}:secrets")  # the MVP accepts no secrets (D-167)
+            for e in c.get("environment") or []:
+                k, v = e.get("name", ""), str(e.get("value", ""))
+                if SECRET_KEY.search(k) or any(rx.search(v.encode()) for rx in SECRET_PATTERNS.values()):
+                    hits.append(f"{td['address']}:{k}")
+    if hits:
+        return _r("SB-SEC-02", "Security", FAIL, f"plaintext secret-like container settings {hits}", "SB-SEC-02")
+    if deferred:
+        return _r("SB-SEC-02", "Security", DEFERRED, f"container definitions known after apply: {deferred}", "SB-SEC-02")
+    return _r("SB-SEC-02", "Security", PASS, "no plaintext secrets in container settings", "SB-SEC-02")
+
+
+# Resources with an hourly charge and the reason code that must justify them (recommendation-engine §9.6, D-44).
+FIXED_COST = {
+    "aws_lb": "FIX_ALB_FOR_CONTAINER",
+    "aws_ecs_service": "FIX_ALWAYS_ON_COMPUTE",
+    "aws_lambda_provisioned_concurrency_config": "FIX_PC_FOR_LATENCY",
+    "aws_nat_gateway": None,  # never (D-44)
+    "aws_eip": None,          # an idle public IPv4 address is billed; tasks get theirs from Fargate
+}
+
+
+def check_fixed_cost(res, justified: set[str] | None) -> CheckResult:
+    """Every fixed-cost resource in the plan is backed by the recommendation's FIX_* reason; interface endpoints
+    and NAT are never created by these blueprints."""
+    found, bad = [], []
+    for r in res:
+        if r["type"] == "aws_vpc_endpoint" and r["after"].get("vpc_endpoint_type") != "Gateway":
+            bad.append(f"{r['address']}(interface endpoint)")
+            continue
+        if r["type"] not in FIXED_COST:
+            continue
+        reason = FIXED_COST[r["type"]]
+        found.append(f"{r['address']}:{reason}")
+        if reason is None or (justified is not None and reason not in justified):
+            bad.append(f"{r['address']}:{reason or 'never allowed'}")
+    if bad:
+        return _r("PLAN-FIXED-COST", "Cost", FAIL, f"fixed-cost resources without justification: {bad}")
+    if not found:
+        return _r("PLAN-FIXED-COST", "Cost", PASS, "no fixed-cost resources")
+    return _r("PLAN-FIXED-COST", "Cost", PASS, f"fixed cost justified by the recommendation: {found}")
+
+
+def validate_plan(plan: dict, *, ip_allowlist: list[str] | None = None, blueprint: str | None = None,
+                  fixed_cost_reasons: set[str] | None = None) -> list[CheckResult]:
     res = _resources(plan)
     out = [
         check_s3_public_access(res),
@@ -289,4 +484,13 @@ def validate_plan(plan: dict, *, ip_allowlist: list[str] | None = None) -> list[
         check_log_retention(res),
     ]
     out += check_bucket_policy(res)
+    if _by_type(res, "aws_lambda_function"):
+        out += [check_role_boundary(res), check_lambda_env_secrets(res), check_api_access_log(res), check_lambda_invoke_scope(res)]
+        out += check_ecr(res)
+    if blueprint in ("container", "container-shared"):
+        out += [check_role_boundary(res), check_container_env_secrets(res), check_task_ingress(res),
+                check_alb_internal(res), check_alb_ingress(res), check_fixed_cost(res, fixed_cost_reasons)]
+        out += check_ecr(res)
+    if blueprint:
+        out.append(check_allowed_types(res, blueprint))
     return out
