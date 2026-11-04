@@ -38,3 +38,19 @@ def test_local_dev_server_is_never_deployed():
     web = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
     assert 'CFG.authMode === "local"' in web  # gated by config; deployed config.js (infra/platform/web.tf) never sets it
     assert "authMode" not in (ROOT / "infra" / "platform" / "web.tf").read_text(encoding="utf-8")
+
+
+def test_blueprint_lock_files_verify_on_linux_codebuild():
+    """CodeBuild (linux_amd64) checks downloaded providers against the lock file. A lock written from a local
+    plugin cache holds only that platform's h1: hash and `terraform init` fails there (Serverless E2E, 2026-10-07);
+    zh: checksums cover every platform's release archive."""
+    dirs = sorted(p for base in ("blueprints", "shared") for p in (ROOT / "infra" / base).iterdir() if (p / "main.tf").exists())
+    assert {d.name for d in dirs} >= {"static", "serverless", "container"}
+    for d in dirs:
+        lock = d / ".terraform.lock.hcl"
+        assert lock.exists(), f"{d.name}: no lock file"
+        blocks = lock.read_text(encoding="utf-8").split('provider "')[1:]
+        assert blocks, f"{d.name}: lock file has no providers"
+        for block in blocks:
+            name = block.split('"', 1)[0]
+            assert '"zh:' in block, f"{d.name}: {name} has no zh: checksums (terraform providers lock -platform=linux_amd64)"

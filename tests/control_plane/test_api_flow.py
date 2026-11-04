@@ -104,7 +104,8 @@ def test_secret_in_bundle_blocks_approval(api):
 
 
 def test_non_provisionable_blueprint_cannot_be_approved(api):
-    inp = {**STATIC_INPUT, "app_form": "SERVER_APP"}
+    # A data layer is recommendation-only; Serverless (D-165) and Container (D-170) without a DB are provisionable.
+    inp = {**STATIC_INPUT, "app_form": "SERVER_APP", "data": {"needed": True, "declared": "DYNAMODB"}, "budget_usd_month": 100}
     b = create(api, inp=inp)
     assert b["upload"] is None
     env_id = b["environment"]["env_id"]
@@ -354,3 +355,106 @@ def test_failed_upload_keeps_a_summary_and_can_be_replaced_in_draft(api):
     upload(env_id, {"dist/index.html": "<h1>ok</h1>"})
     assert call(api, "POST /environments/{env_id}/approve", env_id=env_id)[0] == 202
     assert api.store().get(env_id)["artifact"]["root"] == "dist/"
+
+
+# ------------------------------------------------------------------ presigned upload endpoint (first AWS deploy, 2026-10-05)
+
+def test_presigned_upload_uses_regional_virtual_hosted_endpoint(api):
+    """The global s3.amazonaws.com host is 307-redirected for new non-us-east-1 buckets; browsers fail CORS on that."""
+    b = create(api)
+    url = b["upload"]["url"]
+    assert url == "https://uploads.s3.ap-northeast-2.amazonaws.com/", url
+    assert b["upload"]["fields"]["x-amz-algorithm"] == "AWS4-HMAC-SHA256"  # SigV4 POST policy
+    code, u = call(api, "POST /environments/{env_id}/upload-url", env_id=b["environment"]["env_id"])
+    assert code == 200 and u["upload"]["url"] == url
+
+
+# ------------------------------------------------------------------ Serverless blueprint (D-165, D-166)
+
+SLS_INPUT = {**STATIC_INPUT, "app_form": "SERVER_APP", "budget_usd_month": 10}
+GOOD_IMAGE = {"image": "traefik/whoami:v1.10.3", "env": {"WHOAMI_PORT_NUMBER": "8080"}, "health_path": "/"}
+
+
+def test_serverless_recommendation_asks_for_an_image(api):
+    code, r = call(api, "POST /recommendations", body={"input": SLS_INPUT})
+    assert code == 200 and r["architecture"]["candidate_id"] == "SLS+NONE" and r["provisionable"]
+    assert r["artifact_kind"] == "IMAGE" and r["production_ready_checks"]
+    _, s = call(api, "POST /recommendations", body={"input": STATIC_INPUT})
+    assert s["artifact_kind"] == "STATIC_ZIP"
+
+
+def test_serverless_environment_is_created_with_a_validated_image_and_approved_without_upload(api):
+    code, b = call(api, "POST /environments", body={"name": "app", "input": SLS_INPUT, "image": GOOD_IMAGE})
+    assert code == 201, b
+    env = b["environment"]
+    assert b["upload"] is None
+    assert env["artifact"]["kind"] == "IMAGE" and env["artifact"]["passed"]
+    assert env["artifact"]["image"] == "docker.io/traefik/whoami:v1.10.3"
+    assert call(api, "POST /environments/{env_id}/upload-url", env_id=env["env_id"])[0] == 409
+    code, r = call(api, "POST /environments/{env_id}/approve", env_id=env["env_id"])
+    assert code == 202 and r["environment"]["status"] == "PROVISIONING"
+    stored = api.store().get(env["env_id"])
+    assert stored["revisions"][0]["key"] == "docker.io/traefik/whoami:v1.10.3"
+    assert call(api, "POST /environments/{env_id}/redeploy", env_id=env["env_id"], body={})[0] == 409
+
+
+def test_serverless_rejects_missing_or_unsafe_image_input(api):
+    for image in (None, {"image": "traefik/whoami"}, {"image": "nginx:1", "env": {"DB_PASSWORD": "x"}},
+                  {"image": "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/app:1"}):
+        code, r = call(api, "POST /environments", body={"name": "x", "input": SLS_INPUT, **({"image": image} if image else {})})
+        assert code == 400, (image, r)
+        assert r["artifact"]["passed"] is False
+
+
+# ------------------------------------------------------------------ failure detail visibility
+
+def test_failure_detail_is_for_admins_only(api):
+    env_id = create(api)["environment"]["env_id"]
+    api.store().update(env_id, status="FAILED", terraform_prepare_failed=True,
+                       terraform_error="terraform init: checksum mismatch for hashicorp/aws",
+                       failure={"stage": "TERRAFORM_PREPARE", "message": "Terraform 준비 단계에서 실패했습니다.",
+                                "error": "States.TaskFailed", "cause": "[{'PhaseType': 'BUILD', 'PhaseStatus': 'FAILED'}]",
+                                "at": "2026-10-07T05:53:28Z"})
+    code, owner = call(api, "GET /environments/{env_id}", env_id=env_id)
+    assert code == 200
+    f = owner["environment"]["failure"]
+    assert f == {"stage": "TERRAFORM_PREPARE", "message": "Terraform 준비 단계에서 실패했습니다.", "at": "2026-10-07T05:53:28Z"}
+    raw = json.dumps(owner, ensure_ascii=False)
+    assert "States.TaskFailed" not in raw and "PhaseType" not in raw and "checksum" not in raw
+    code, admin = call(api, "GET /environments/{env_id}", user="coach", admin=True, env_id=env_id)
+    assert code == 200 and admin["environment"]["failure"]["error"] == "States.TaskFailed"
+    assert "PhaseType" in admin["environment"]["failure"]["cause"] and "checksum" in admin["environment"]["terraform_error"]
+
+
+def test_retry_after_prepare_failure_clears_the_failure_flags(api):
+    env_id = create(api)["environment"]["env_id"]
+    api.store().update(env_id, status="FAILED", terraform_prepare_failed=True, image_build_failed=True,
+                       failure={"stage": "TERRAFORM_PREPARE", "message": "m"})
+    code, r = call(api, "POST /environments/{env_id}/retry", env_id=env_id)
+    assert code == 202 and r["environment"]["status"] == "PROVISIONING"
+    env = api.store().get(env_id)
+    assert env["terraform_prepare_failed"] is False and env["image_build_failed"] is False
+    assert not env["terraform_error"]
+
+
+# ------------------------------------------------------------------ Container (D-170)
+
+CTR_INPUT = {**SLS_INPUT, "capabilities": {"realtime_connection": True}, "budget_usd_month": 100}
+
+
+def test_container_recommendation_asks_for_an_image_and_shows_its_fixed_cost(api):
+    code, r = call(api, "POST /recommendations", body={"input": CTR_INPUT})
+    assert code == 200 and r["architecture"]["candidate_id"] == "CTR+NONE" and r["provisionable"]
+    assert r["artifact_kind"] == "IMAGE" and r["blueprint"] == "container"
+    assert {c["id"] for c in r["production_ready_checks"]} >= {"SB-PUB-02", "SB-PUB-03", "PR-C-02", "PLAN-FIXED-COST"}
+    assert r["cost"]["fixed_usd"] > 0 and any(i["resource"] == "alb" and i["shared"] for i in r["cost"]["line_items_upper"])
+
+
+def test_container_environment_is_created_like_serverless(api):
+    code, b = call(api, "POST /environments", body={"name": "ws", "input": CTR_INPUT, "image": GOOD_IMAGE})
+    assert code == 201, b
+    env = b["environment"]
+    assert b["upload"] is None and env["artifact"]["kind"] == "IMAGE" and env["artifact"]["passed"]
+    code, r = call(api, "POST /environments/{env_id}/approve", env_id=env["env_id"])
+    assert code == 202 and r["environment"]["status"] == "PROVISIONING"
+    assert call(api, "POST /environments/{env_id}/redeploy", env_id=env["env_id"], body={})[0] == 409  # not in the MVP

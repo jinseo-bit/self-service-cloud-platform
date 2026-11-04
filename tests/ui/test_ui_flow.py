@@ -4,6 +4,7 @@ No AWS is called: the local server replaces the AWS boundary (see its docstring)
 Screenshots go to build/screenshots/. Run:  python -m pytest tests/ui -q
 """
 
+import json
 import socket
 import subprocess
 import sys
@@ -26,11 +27,11 @@ def _free_port():
         return s.getsockname()[1]
 
 
-@pytest.fixture(scope="module")
-def server():
+def _start_server(log_name="local_dev.log"):
+    """A local_dev.py process: its moto store is in memory, so every process starts with an empty platform."""
     port = _free_port()
     (ROOT / "build").mkdir(exist_ok=True)
-    log = open(ROOT / "build" / "local_dev.log", "w", encoding="utf-8")  # never a PIPE: an unread pipe blocks the server
+    log = open(ROOT / "build" / log_name, "w", encoding="utf-8")  # never a PIPE: an unread pipe blocks the server
     proc = subprocess.Popen([sys.executable, str(ROOT / "scripts" / "local_dev.py"), "--port", str(port), "--delay", "0.6"],
                             cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, env={**__import__("os").environ, "PYTHONIOENCODING": "utf-8"})
     url = f"http://127.0.0.1:{port}"  # the origin the server prints; localhost is a different browser origin
@@ -42,7 +43,22 @@ def server():
             time.sleep(0.2)
     else:
         proc.kill()
-        raise RuntimeError((ROOT / "build" / "local_dev.log").read_text(encoding="utf-8"))
+        raise RuntimeError((ROOT / "build" / log_name).read_text(encoding="utf-8"))
+    return url, proc, log
+
+
+@pytest.fixture(scope="module")
+def server():
+    url, proc, log = _start_server()
+    yield url
+    proc.kill()
+    log.close()
+
+
+@pytest.fixture
+def fresh_server():
+    """For flows whose fixed cost must fit the $30 platform cap: earlier tests leave environments behind on `server`."""
+    url, proc, log = _start_server("local_dev_fresh.log")
     yield url
     proc.kill()
     log.close()
@@ -68,18 +84,27 @@ def browser():
         b.close()
 
 
-@pytest.fixture
-def page(browser, server):
+def _page(browser, base):
     ctx = browser.new_context(viewport={"width": 1440, "height": 900}, locale="ko-KR")
     pg = ctx.new_page()
     errors = []
     pg.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
     # HTTP 4xx responses we provoke on purpose are logged by Chromium as "Failed to load resource"; not JS errors.
     pg.on("console", lambda m: m.type == "error" and "Failed to load resource" not in m.text and errors.append(f"console: {m.text}"))
-    pg.base = server
+    pg.base = base
     yield pg
     ctx.close()
     assert not errors, errors
+
+
+@pytest.fixture
+def page(browser, server):
+    yield from _page(browser, server)
+
+
+@pytest.fixture
+def fresh_page(browser, fresh_server):
+    yield from _page(browser, fresh_server)
 
 
 def wait_result(pg, texts, timeout=30_000):
@@ -91,6 +116,11 @@ def wait_result(pg, texts, timeout=30_000):
 def shot(pg, name, full=True):
     SHOTS.mkdir(parents=True, exist_ok=True)
     pg.screenshot(path=str(SHOTS / f"{name}.png"), full_page=full)
+
+
+def arch_path(pg):
+    """Node titles of the architecture diagram, in request order."""
+    return [b.inner_text() for b in pg.locator(".arch").first.locator(".node b").all()]
 
 
 def login(pg, email="dev@example.com", admin=False):
@@ -106,11 +136,42 @@ def login(pg, email="dev@example.com", admin=False):
         raise AssertionError("login did not reach the app shell: " + pg.inner_text("body")[:500]) from None
 
 
-def answer_wizard(pg, *, preset="포트폴리오 · 블로그", name="내 포트폴리오", overrides=None, snap_prefix=None):
+# 맞춤형 starts with no answers (D-178). Tests answer with what the old "포트폴리오 · 블로그" preset filled in.
+PORTFOLIO = {
+    "어떤 앱을 올리시나요?": "화면만 있는 사이트",
+    "가장 오래 걸리는 요청은 얼마나 걸리나요?": "대부분 몇 초 안에 끝나요",
+    "하루에 몇 명 정도 쓰나요?": "100명 이하",
+    "주로 언제 쓰나요?": "거의 안 써요",
+    "데이터를 저장해야 하나요?": "저장할 데이터 없음",
+    "잠깐 멈추면 어떻게 되나요?": "잠깐 멈춰도 괜찮아요",
+    "첫 요청이 1~2초 느려도 괜찮나요?": "괜찮아요",
+    "누가 접속하나요?": "누구나",
+}
+PORTFOLIO_BUDGET = "5"
+
+
+def start_custom(pg):
+    pg.goto(pg.base + "/#/new/custom")
+    pg.wait_for_selector("#q-title")
+
+
+def next_question(pg):
+    """'다음', answering a still-unanswered single-choice question with the portfolio answer first."""
+    title = pg.locator("#q-title").inner_text()
+    radios = pg.get_by_role("radiogroup").get_by_role("radio")
+    if title in PORTFOLIO and not any(r.get_attribute("aria-checked") == "true" for r in radios.all()):
+        pg.get_by_role("radio", name=PORTFOLIO[title]).first.click()
+    if title == "마지막으로 확인할게요":
+        if not pg.get_by_label("한 달 최대 예산 (USD)").input_value():
+            pg.get_by_label("한 달 최대 예산 (USD)").fill(PORTFOLIO_BUDGET)
+        return
+    pg.get_by_role("button", name="다음").click()
+
+
+def answer_wizard(pg, *, name="내 포트폴리오", overrides=None, snap_prefix=None):
     """Walks every question; overrides: {question title: option label} (multi: list)."""
     overrides = overrides or {}
-    pg.goto(pg.base + "/#/new/custom")
-    pg.get_by_role("button", name=preset).click()
+    start_custom(pg)
     for i in range(14):
         title = pg.locator("#q-title").inner_text()
         if title in overrides:
@@ -122,11 +183,12 @@ def answer_wizard(pg, *, preset="포트폴리오 · 블로그", name="내 포트
         if title == "마지막으로 확인할게요":
             if name is not None:
                 pg.get_by_label("환경 이름").fill(name)
+            pg.get_by_label("한 달 최대 예산 (USD)").fill(overrides.get("_budget", PORTFOLIO_BUDGET))
             pg.get_by_role("button", name="추천 받기").click()
             return
         if title == "누가 접속하나요?" and isinstance(overrides.get("_cidrs"), str):
             pg.get_by_label("허용할 IP 주소 범위").fill(overrides["_cidrs"])
-        pg.get_by_role("button", name="다음").click()
+        next_question(pg)
     raise AssertionError("wizard did not finish")
 
 
@@ -141,10 +203,11 @@ def test_static_happy_path_with_delete(page, site_zip):
     assert pg.get_by_text("첫 환경을 만들어 볼까요?").is_visible()
 
     pg.get_by_role("link", name="＋ 새 환경 만들기").click()
-    shot(pg, "03-presets", full=False)
+    shot(pg, "03-start", full=False)
     answer_wizard(pg, snap_prefix="04-wizard")
 
-    pg.wait_for_selector("text=정적 사이트 구성을 추천해요")
+    pg.wait_for_selector("text=정적 호스팅 구성을 추천해요")
+    assert arch_path(pg) == ["사용자", "CloudFront", "S3 (비공개)"], "Static diagram is unchanged"
     for text in ("이렇게 고른 이유", "예상 비용", "항상 적용되는 보안 기준", "만든 뒤 자동으로 확인하는 것", "사이트 파일 올리기"):
         assert pg.get_by_role("heading", name=text).is_visible(), text
     # regular users read sentences, never internal reason codes / check ids
@@ -191,7 +254,7 @@ def test_injected_security_failure_shows_failed(page, site_zip):
     pg = page
     login(pg, "fail@example.com")
     answer_wizard(pg, name="fail-demo")
-    pg.wait_for_selector("text=정적 사이트 구성을 추천해요")
+    pg.wait_for_selector("text=정적 호스팅 구성을 추천해요")
     pg.set_input_files("#file", str(site_zip))
     pg.get_by_role("button", name="승인하고 만들기").click()
     pg.get_by_role("dialog").get_by_role("button", name="승인하고 만들기").click()
@@ -205,7 +268,7 @@ def test_injected_degraded(page, site_zip):
     pg = page
     login(pg, "deg@example.com")
     answer_wizard(pg, name="degraded-demo")
-    pg.wait_for_selector("text=정적 사이트 구성을 추천해요")
+    pg.wait_for_selector("text=정적 호스팅 구성을 추천해요")
     pg.set_input_files("#file", str(site_zip))
     pg.get_by_role("button", name="승인하고 만들기").click()
     pg.get_by_role("dialog").get_by_role("button", name="승인하고 만들기").click()
@@ -221,7 +284,7 @@ def test_secret_in_bundle_is_rejected_before_provisioning(page, tmp_path):
         z.writestr("app.js", "const k = 'AKIAABCDEFGHIJKLMNOP';")
     login(pg, "secret@example.com")
     answer_wizard(pg, name="secret-demo")
-    pg.wait_for_selector("text=정적 사이트 구성을 추천해요")
+    pg.wait_for_selector("text=정적 호스팅 구성을 추천해요")
     pg.set_input_files("#file", str(bad))
     pg.get_by_role("button", name="승인하고 만들기").click()
     pg.get_by_role("dialog").get_by_role("button", name="승인하고 만들기").click()
@@ -247,7 +310,7 @@ def test_validation_errors_and_cancel(page, site_zip):
     # cancel in the approval dialog creates nothing
     pg.get_by_label("한 달 최대 예산 (USD)").fill("5")
     pg.get_by_role("button", name="추천 받기").click()
-    pg.wait_for_selector("text=정적 사이트 구성을 추천해요")
+    pg.wait_for_selector("text=정적 호스팅 구성을 추천해요")
     pg.set_input_files("#file", str(site_zip))
     pg.get_by_role("button", name="승인하고 만들기").click()
     pg.get_by_role("dialog").get_by_role("button", name="취소").click()
@@ -259,10 +322,9 @@ def test_validation_errors_and_cancel(page, site_zip):
 def test_invalid_cidr_is_blocked(page):
     pg = page
     login(pg, "ip@example.com")
-    pg.goto(pg.base + "/#/new/custom")
-    pg.get_by_role("button", name="포트폴리오 · 블로그").click()
+    start_custom(pg)
     while pg.locator("#q-title").inner_text() != "누가 접속하나요?":
-        pg.get_by_role("button", name="다음").click()
+        next_question(pg)
     pg.get_by_role("radio", name="특정 IP에서만").click()
     pg.get_by_label("허용할 IP 주소 범위").fill("10.0.0.300/8, abc")
     pg.get_by_role("button", name="다음").click()
@@ -278,8 +340,10 @@ def test_unsupported_and_not_yet_provisionable(page):
     pg.wait_for_selector("text=아직 지원하지 않는 요구사항이에요")
     assert pg.get_by_text("2분 넘게 걸리는 요청은").is_visible()
     shot(pg, "16-unsupported", full=False)
-    answer_wizard(pg, name="api", overrides={"어떤 앱을 올리시나요?": "서버 앱"})
-    pg.wait_for_selector("text=이 구성을 추천해요")
+    # a data layer is recommendation-only (Serverless and Container without a DB are provisionable)
+    answer_wizard(pg, name="api", overrides={"어떤 앱을 올리시나요?": "서버 앱",
+                                             "데이터를 저장해야 하나요?": "저장해야 함 · DynamoDB를 써요"})
+    pg.wait_for_selector("text=구성을 추천해요")
     assert pg.get_by_text("아직 플랫폼에서 만들 수 없어요").is_visible()
     assert pg.get_by_role("heading", name="고르지 않은 구성").is_visible()
     shot(pg, "17-serverless-not-yet")
@@ -298,15 +362,14 @@ def test_budget_blocked_shows_relax_options(page):
 def test_prod_needs_admin_then_admin_approves(page, site_zip):
     pg = page
     login(pg, "p@example.com")
-    pg.goto(pg.base + "/#/new/custom")
-    pg.get_by_role("button", name="포트폴리오 · 블로그").click()
+    start_custom(pg)
     while pg.locator("#q-title").inner_text() != "마지막으로 확인할게요":
-        pg.get_by_role("button", name="다음").click()
+        next_question(pg)
     pg.get_by_label("환경 이름").fill("prod-site")
     pg.get_by_role("radio", name="실제 운영용").click()
     pg.get_by_label("한 달 최대 예산 (USD)").fill("20")
     pg.get_by_role("button", name="추천 받기").click()
-    pg.wait_for_selector("text=정적 사이트 구성을 추천해요")
+    pg.wait_for_selector("text=정적 호스팅 구성을 추천해요")
     pg.set_input_files("#file", str(site_zip))
     pg.get_by_role("button", name="관리자에게 승인 요청").click()
     pg.get_by_role("dialog").get_by_role("button", name="승인 요청").click()
@@ -328,7 +391,7 @@ def test_responsive_layout_has_no_horizontal_scroll(browser, server, width):
     pg.base = server
     login(pg, f"r{width}@example.com")
     answer_wizard(pg, name="mobile")
-    pg.wait_for_selector("text=정적 사이트 구성을 추천해요")
+    pg.wait_for_selector("text=정적 호스팅 구성을 추천해요")
     overflow = pg.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
     shot(pg, f"21-review-{width}")
     ctx.close()
@@ -338,13 +401,14 @@ def test_responsive_layout_has_no_horizontal_scroll(browser, server, width):
 def test_keyboard_only_wizard(page):
     pg = page
     login(pg, "kbd@example.com")
-    pg.goto(pg.base + "/#/new/custom")
-    pg.get_by_role("button", name="포트폴리오 · 블로그").focus()
+    pg.goto(pg.base + "/#/new")
+    pg.get_by_role("link", name="내 앱에 맞게 만들기").focus()
     pg.keyboard.press("Enter")
     pg.wait_for_selector("#q-title")
     pg.get_by_role("radio", name="서버 앱").focus()
     pg.keyboard.press("Space")
     assert pg.get_by_role("radio", name="서버 앱").get_attribute("aria-checked") == "true"
+    assert pg.get_by_role("button", name="다음").is_enabled()
 
 
 AXE = Path(__file__).with_name("vendor") / "axe.min.js"
@@ -363,12 +427,10 @@ def test_accessibility_no_serious_violations(page, site_zip):
     pg.wait_for_selector("#email")
     found = {"login": _axe(pg)}
     login(pg, "a11y@example.com")
-    pg.goto(pg.base + "/#/new/custom")
-    pg.get_by_role("button", name="포트폴리오 · 블로그").click()
-    pg.wait_for_selector("#q-title")
+    start_custom(pg)
     found["question"] = _axe(pg)
     answer_wizard(pg, name="a11y")
-    pg.wait_for_selector("text=정적 사이트 구성을 추천해요")
+    pg.wait_for_selector("text=정적 호스팅 구성을 추천해요")
     found["review"] = _axe(pg)
     pg.set_input_files("#file", str(site_zip))
     pg.get_by_role("button", name="승인하고 만들기").click()
@@ -390,7 +452,7 @@ def site_zip_v2(tmp_path_factory):
 
 def _create_ready(pg, site_zip, name):
     answer_wizard(pg, name=name)
-    pg.wait_for_selector("text=정적 사이트 구성을 추천해요")
+    pg.wait_for_selector("text=정적 호스팅 구성을 추천해요")
     pg.set_input_files("#file", str(site_zip))
     pg.get_by_role("button", name="승인하고 만들기").click()
     pg.get_by_role("dialog").get_by_role("button", name="승인하고 만들기").click()
@@ -401,7 +463,7 @@ def test_reviewer_sees_reason_codes(page):
     pg = page
     login(pg, "coach2@example.com", admin=True)
     answer_wizard(pg, name="review")
-    pg.wait_for_selector("text=정적 사이트 구성을 추천해요")
+    pg.wait_for_selector("text=정적 호스팅 구성을 추천해요")
     assert pg.locator(".code-tag", has_text="SEL_STATIC_FRONTEND").count() == 1
     pg.get_by_text("검토자용 상세").click()
     assert pg.get_by_text("rules_version").is_visible()
@@ -490,7 +552,7 @@ def test_service_worker_script_requests_are_refused(server):
 # ------------------------------------------------------------------ the full journey in one session
 
 def test_full_user_journey(page, site_zip, site_zip_v2):
-    """로그인 → 내 환경 → 프리셋 → 8개 질문 → 추천 → 비용/보안 → 업로드 → 승인 → 생성 시뮬레이션
+    """로그인 → 내 환경 → 맞춤형 → 8개 질문 → 추천 → 비용/보안 → 업로드 → 승인 → 생성 시뮬레이션
     → Environment Detail → 재배포 → rollback → 삭제"""
     pg = page
     J = "journey"
@@ -502,9 +564,10 @@ def test_full_user_journey(page, site_zip, site_zip_v2):
     shot(pg, f"{J}-02-my-environments", full=False)
 
     pg.get_by_role("link", name="＋ 새 환경 만들기").click()
-    pg.get_by_role("link", name="맞춤형으로 만들기").click()
-    shot(pg, f"{J}-03-presets", full=False)
-    pg.get_by_role("button", name="포트폴리오 · 블로그").click()
+    pg.get_by_role("link", name="내 앱에 맞게 만들기").click()
+    pg.wait_for_selector("#q-title")
+    assert pg.locator("#q-title").inner_text() == "어떤 앱을 올리시나요?", "맞춤형 opens the first question directly"
+    assert pg.get_by_role("button", name="다음").is_disabled(), "nothing is pre-selected"
     seen = []
     while True:
         title = pg.locator("#q-title").inner_text()
@@ -512,12 +575,13 @@ def test_full_user_journey(page, site_zip, site_zip_v2):
         shot(pg, f"{J}-04-q{len(seen)}", full=False)
         if title == "마지막으로 확인할게요":
             pg.get_by_label("환경 이름").fill("journey-site")
+            next_question(pg)
             pg.get_by_role("button", name="추천 받기").click()
             break
-        pg.get_by_role("button", name="다음").click()
+        next_question(pg)
     assert len(seen) == 8, seen  # static: the capability question is skipped
 
-    pg.wait_for_selector("text=정적 사이트 구성을 추천해요")
+    pg.wait_for_selector("text=정적 호스팅 구성을 추천해요")
     for heading in ("이렇게 고른 이유", "예상 비용", "항상 적용되는 보안 기준", "만든 뒤 자동으로 확인하는 것"):
         assert pg.get_by_role("heading", name=heading).is_visible(), heading
     shot(pg, f"{J}-05-recommendation")
@@ -565,13 +629,12 @@ def test_full_user_journey(page, site_zip, site_zip_v2):
 
 # ------------------------------------------------------------------ D-157..D-162 regressions
 
-def _to_question(pg, title, preset="포트폴리오 · 블로그", app_form=None):
-    pg.goto(pg.base + "/#/new/custom")
-    pg.get_by_role("button", name=preset).click()
+def _to_question(pg, title, app_form=None):
+    start_custom(pg)
     if app_form:
         pg.get_by_role("radio", name=app_form).click()
     while pg.locator("#q-title").inner_text() != title:
-        pg.get_by_role("button", name="다음").click()
+        next_question(pg)
 
 
 def test_request_duration_is_single_choice(page):
@@ -604,10 +667,10 @@ def test_unsupported_shows_cause_and_jumps_to_that_question(page):
     assert pg.locator("#q-title").inner_text() == "가장 오래 걸리는 요청은 얼마나 걸리나요?", "must open the cause, not the last question"
     pg.get_by_role("radio", name="1~2분 걸리는 작업도 있어요").click()
     while pg.locator("#q-title").inner_text() != "마지막으로 확인할게요":
-        pg.get_by_role("button", name="다음").click()
+        next_question(pg)
     pg.get_by_label("한 달 최대 예산 (USD)").fill("200")
     pg.get_by_role("button", name="추천 받기").click()
-    pg.wait_for_selector("text=이 구성을 추천해요")
+    pg.wait_for_selector("text=구성을 추천해요")
     assert pg.get_by_text("CDN 대기 시간을 120초").is_visible()
 
 
@@ -663,14 +726,13 @@ def test_home_after_environment_created(page, site_zip):
 
 
 def _over_budget_review(pg, budget="1", scale="1,000명 이하", pattern="하루 종일 꾸준히"):
-    pg.goto(pg.base + "/#/new/custom")
-    pg.get_by_role("button", name="포트폴리오 · 블로그").click()
+    start_custom(pg)
     while (t := pg.locator("#q-title").inner_text()) != "마지막으로 확인할게요":
         if t == "하루에 몇 명 정도 쓰나요?":
             pg.get_by_role("radio", name=scale).click()
         if t == "주로 언제 쓰나요?":
             pg.get_by_role("radio", name=pattern).click()
-        pg.get_by_role("button", name="다음").click()
+        next_question(pg)
     pg.get_by_label("환경 이름").fill("over-budget")
     pg.get_by_label("한 달 최대 예산 (USD)").fill(budget)
     pg.get_by_role("button", name="추천 받기").click()
@@ -685,7 +747,7 @@ def test_budget_adjust_shows_before_after_and_applies_only_on_click(page):
     pg.get_by_role("button", name="다음").click()
     pg.get_by_role("radio", name="항상 빨라야 해요").click()
     while pg.locator("#q-title").inner_text() != "마지막으로 확인할게요":
-        pg.get_by_role("button", name="다음").click()
+        next_question(pg)
     pg.get_by_label("환경 이름").fill("adjust")
     pg.get_by_label("한 달 최대 예산 (USD)").fill("3")
     pg.get_by_role("button", name="추천 받기").click()
@@ -772,7 +834,7 @@ def test_override_does_not_bypass_security_checks(page, tmp_path):
 
 def _quick_review(pg, name="quick-site", budget=None, tier=None):
     pg.goto(pg.base + "/#/new")
-    pg.get_by_role("link", name="빠르게 시작하기").click()
+    pg.get_by_role("link", name="템플릿으로 시작하기").click()
     pg.get_by_role("button", name="나만의 정적 웹사이트 만들기").click()
     pg.get_by_label("환경 이름").fill(name)
     if budget is not None:
@@ -788,19 +850,25 @@ def test_start_offers_custom_and_quick_start(page):
     login(pg, "start@example.com")
     pg.get_by_role("link", name="＋ 새 환경 만들기").click()
     pg.get_by_role("heading", name="어떻게 만들까요?").wait_for()
-    assert pg.get_by_role("link", name="맞춤형으로 만들기").is_visible()
+    assert pg.get_by_role("link", name="내 앱에 맞게 만들기").is_visible()
     assert pg.get_by_text("비용, 보안, 가용성을 고려해서").is_visible()
-    assert pg.get_by_role("link", name="빠르게 시작하기").is_visible()
+    assert pg.get_by_role("link", name="템플릿으로 시작하기").is_visible()
     shot(pg, "35-start-modes", full=False)
-    pg.get_by_role("link", name="빠르게 시작하기").click()
+    pg.get_by_role("link", name="템플릿으로 시작하기").click()
     pg.get_by_role("button", name="나만의 정적 웹사이트 만들기").wait_for()
     assert pg.locator("[data-template]").count() == 1, "only provisionable templates are shown"
     for later in ("웹 API", "백엔드", "컨테이너", "PostgreSQL"):
         assert pg.get_by_text(later).count() == 0, later
     shot(pg, "36-templates", full=False)
     pg.get_by_role("link", name="이전").click()
-    pg.get_by_role("link", name="맞춤형으로 만들기").click()
-    pg.get_by_role("button", name="포트폴리오 · 블로그").wait_for()
+    pg.get_by_role("link", name="내 앱에 맞게 만들기").click()
+    pg.wait_for_selector("#q-title")
+    assert pg.locator("#q-title").inner_text() == "어떤 앱을 올리시나요?", "no preset step before the questions (D-178)"
+    assert pg.locator("[data-preset]").count() == 0
+    assert all(r.get_attribute("aria-checked") == "false" for r in pg.get_by_role("radio").all()), "nothing pre-selected"
+    assert pg.get_by_role("button", name="다음").is_disabled()
+    pg.get_by_role("button", name="이전").click()
+    pg.get_by_role("heading", name="어떻게 만들까요?").wait_for()
 
 
 def test_quick_start_static_skips_questions_and_creates(page, site_zip):
@@ -858,7 +926,7 @@ def test_quick_start_switches_to_custom_with_template_defaults(page):
     assert pg.get_by_label("환경 이름").input_value() == "tpl-to-custom"
     assert pg.get_by_label("한 달 최대 예산 (USD)").input_value() == "8"
     pg.get_by_role("button", name="추천 받기").click()
-    pg.wait_for_selector("text=정적 사이트 구성을 추천해요")  # back on the custom review, same engine
+    pg.wait_for_selector("text=정적 호스팅 구성을 추천해요")  # back on the custom review, same engine
     assert pg.locator("[data-quick-review]").count() == 0
 
 
@@ -926,9 +994,9 @@ def test_accessibility_quick_start_and_upload_help(page, tmp_path):
         z.writestr("app.exe", "MZ")
     login(pg, "a11y-q@example.com")
     pg.goto(pg.base + "/#/new")
-    pg.get_by_role("link", name="빠르게 시작하기").wait_for()
+    pg.get_by_role("link", name="템플릿으로 시작하기").wait_for()
     found = {"start": _axe(pg)}
-    pg.get_by_role("link", name="빠르게 시작하기").click()
+    pg.get_by_role("link", name="템플릿으로 시작하기").click()
     pg.get_by_role("button", name="나만의 정적 웹사이트 만들기").wait_for()
     found["templates"] = _axe(pg)
     pg.get_by_role("button", name="나만의 정적 웹사이트 만들기").click()
@@ -945,3 +1013,135 @@ def test_accessibility_quick_start_and_upload_help(page, tmp_path):
     pg.wait_for_load_state("networkidle")
     found["upload-help"] = _axe(pg)
     assert not any(found.values()), found
+
+
+# ------------------------------------------------------------------ Serverless blueprint (D-165, D-166)
+
+def test_serverless_flow_with_container_image(page):
+    pg = page
+    login(pg, "sls@example.com")
+    answer_wizard(pg, name="sls-app", overrides={"어떤 앱을 올리시나요?": "서버 앱"})
+    pg.wait_for_selector("text=구성을 추천해요")
+    assert pg.get_by_role("heading", name="요청 단위 실행 구성을 추천해요").is_visible(), "run-model name (D-182)"
+    # the diagram is the path Terraform builds: no CloudFront in front of the HTTP API (E2E 2026-10-07)
+    assert arch_path(pg) == ["사용자", "API Gateway (HTTP API)", "Lambda", "컨테이너 이미지"], arch_path(pg)
+    assert pg.get_by_role("heading", name="앱 컨테이너 이미지").is_visible()
+    assert pg.locator("#file").count() == 0, "Serverless asks for an image, not a zip"
+    make = pg.get_by_role("button", name="승인하고 만들기")
+    assert make.is_disabled()
+    pg.get_by_label("이미지 주소 (태그 또는 digest 포함)").fill("traefik/whoami:v1.10.3")
+    pg.get_by_label("환경변수 (한 줄에 하나, KEY=VALUE)").fill("WHOAMI_PORT_NUMBER=8080")
+    assert make.is_enabled()
+    shot(pg, "40-serverless-image-form")
+    if AXE.exists():
+        assert not _axe(pg), "image form must have no serious accessibility violations"
+    make.click()
+    d = pg.get_by_role("dialog")
+    assert "Lambda + API Gateway" in d.inner_text() and "docker.io/traefik/whoami:v1.10.3" not in d.inner_text()
+    assert "traefik/whoami:v1.10.3" in d.inner_text()
+    d.get_by_role("button", name="승인하고 만들기").click()
+    pg.wait_for_selector("text=환경이 준비됐어요", timeout=30_000)
+    assert pg.get_by_text("docker.io/traefik/whoami:v1.10.3").first.is_visible(), "the normalized image is recorded"
+    assert pg.get_by_text("Lambda용 이미지 빌드(crane)").first.is_visible()
+    assert pg.locator("#rfile").count() == 0, "file redeploy is Static-only"
+    assert "CloudFront" not in arch_path(pg), "the environment page shows the same Serverless path"
+    shot(pg, "41-serverless-ready")
+
+
+def test_serverless_secret_values_are_blocked_before_creation(page):
+    pg = page
+    login(pg, "sls-secret@example.com")
+    answer_wizard(pg, name="sls-secret", overrides={"어떤 앱을 올리시나요?": "서버 앱"})
+    pg.wait_for_selector("text=구성을 추천해요")
+    pg.get_by_label("이미지 주소 (태그 또는 digest 포함)").fill("nginx:1.27")
+    pg.get_by_label("환경변수 (한 줄에 하나, KEY=VALUE)").fill("DB_PASSWORD=hunter2")
+    pg.get_by_role("button", name="승인하고 만들기").click()
+    pg.get_by_role("dialog").get_by_role("button", name="승인하고 만들기").click()
+    err = pg.locator("#err")
+    pg.wait_for_function("document.getElementById('err').innerText.length > 0", timeout=10_000)
+    assert "비밀값" in err.inner_text()
+    pg.get_by_role("link", name="홈으로").click()
+    pg.get_by_role("dialog").get_by_role("button", name="나가기").click()  # the unsaved-input guard (D-162)
+    pg.get_by_role("heading", name="내 환경").wait_for()
+    assert pg.get_by_role("link", name="sls-secret", exact=True).count() == 0, "nothing was created"
+
+
+def test_container_flow_with_cost_notice_and_diagram(fresh_page):
+    pg = fresh_page
+    login(pg, "ctr@example.com")
+    answer_wizard(pg, name="ws-app", overrides={"어떤 앱을 올리시나요?": "서버 앱", "서버 앱에 이런 기능이 있나요?": ["실시간 연결"],
+                                                "_budget": "100"})
+    pg.wait_for_selector("text=구성을 추천해요")
+    assert arch_path(pg) == ["사용자", "CloudFront", "내부 ALB", "ECS Fargate"], arch_path(pg)
+    assert pg.get_by_role("heading", name="상시 실행 컨테이너 구성을 추천해요").is_visible(), "run-model name (D-182)"
+    assert pg.get_by_role("heading", name="앱 컨테이너 이미지").is_visible()
+    assert pg.get_by_text("ECS Fargate에서 실행해요").is_visible() and pg.get_by_text("Lambda Web Adapter").count() == 0
+    notice = pg.locator(".notice.warn", has_text="항상 실행돼서 고정비가 있어요")
+    assert notice.is_visible() and "마지막 컨테이너 환경을 지우면 함께 삭제돼요" in notice.inner_text()
+    make = pg.get_by_role("button", name="승인하고 만들기")
+    pg.get_by_label("이미지 주소 (태그 또는 digest 포함)").fill("traefik/whoami:v1.10.3")
+    pg.get_by_label("환경변수 (한 줄에 하나, KEY=VALUE)").fill("WHOAMI_PORT_NUMBER=8080")
+    assert make.is_enabled()
+    shot(pg, "50-container-image-form")
+    if AXE.exists():
+        assert not _axe(pg), "container form must have no serious accessibility violations"
+    make.click()
+    d = pg.get_by_role("dialog")
+    assert "ECS Fargate" in d.inner_text()
+    d.get_by_role("button", name="승인하고 만들기").click()
+    pg.wait_for_selector("text=환경이 준비됐어요", timeout=30_000)
+    assert pg.get_by_text("이미지 복사(crane), ECS 실행은 하지 않습니다").first.is_visible()
+    assert arch_path(pg) == ["사용자", "CloudFront", "내부 ALB", "ECS Fargate"]
+    shot(pg, "51-container-ready")
+
+
+# ------------------------------------------------------------------ Claude Code agent drafts (D-181)
+
+def test_agent_draft_is_marked_and_approved_by_a_person(page, site_zip):
+    """The agent's token makes the DRAFT; the person sees who made it and approves it in the UI."""
+    pg = page
+    login(pg, "agent-owner@example.com")
+    def call(token, method, path, body=None):
+        req = urllib.request.Request(f"{pg.base}{path}", data=json.dumps(body).encode() if body is not None else None,
+                                     headers={"Content-Type": "application/json", **({"Authorization": token} if token else {})},
+                                     method=method)
+        return json.loads(urllib.request.urlopen(req).read())
+    token = call(None, "POST", "/local/auth", {"email": "agent-owner@example.com", "client": "agent"})["IdToken"]
+    req = {"app_form": "STATIC_SITE", "traffic_scale": "T1", "traffic_pattern": "IDLE_MOSTLY", "downtime_tolerance": "OK",
+           "latency_sensitivity": "TOLERANT", "exposure": "PUBLIC", "tier": "DEV", "budget_usd_month": 5, "data": {"needed": False}}
+    env_id = call(token, "POST", "/api/environments", {"name": "from-agent", "input": req})["environment"]["env_id"]
+    pg.goto(f"{pg.base}/#/env/{env_id}")
+    pg.wait_for_selector("[data-agent-draft]")
+    assert pg.locator("[data-agent]").inner_text() == "Claude Code agent"
+    shot(pg, "39-agent-draft")
+    # the person uploads the build and approves; only then is anything created
+    pg.set_input_files("#dfile", str(site_zip))
+    pg.get_by_role("button", name="이 파일로 다시 검사하고 승인하기").click()
+    if pg.get_by_role("dialog").count():
+        pg.get_by_role("dialog").get_by_role("button", name="승인하고 만들기").click()
+    pg.wait_for_selector("text=환경이 준비됐어요", timeout=30_000)
+    assert "agent" in pg.locator(".timeline").inner_text()
+
+
+# ------------------------------------------------------------------ Day-2 drift (D-186)
+
+def test_console_change_shows_drift_and_a_person_approves_the_repair(page, site_zip):
+    pg = page
+    login(pg, "day2@example.com")
+    _create_ready(pg, site_zip, "day2-site")
+    env_id = pg.url.rsplit("/", 1)[-1]
+    urllib.request.urlopen(urllib.request.Request(f"{pg.base}/local/drift/{env_id}", data=b"{}", method="POST",
+                                                  headers={"Content-Type": "application/json"}))
+    pg.reload()
+    pg.wait_for_selector("text=승인된 구성과 설정이 달라졌어요")
+    card = pg.locator("[data-drift]")
+    assert "PutBucketPolicy" in card.inner_text() and "local-console-user" in card.inner_text()
+    pg.wait_for_selector("[data-repair-plan] >> text=aws_s3_bucket_policy.origin", timeout=15_000)
+    shot(pg, "40-drift-detected")
+    pg.get_by_role("button", name="원래 구성으로 복구").click()
+    d = pg.get_by_role("dialog")
+    assert "aws_s3_bucket_policy.origin" in d.inner_text()
+    d.get_by_role("button", name="복구").click()
+    pg.wait_for_selector("text=환경이 준비됐어요", timeout=30_000)
+    assert "승인 후 복구 완료까지" in pg.locator("[data-last-repair]").inner_text()
+    shot(pg, "41-drift-repaired")

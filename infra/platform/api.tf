@@ -17,6 +17,7 @@ locals {
     UPLOAD_BUCKET = aws_s3_bucket.uploads.id
     LOG_BUCKET    = aws_s3_bucket.logs.id
     TRAIL_NAME    = local.trail_name
+    ENV_BOUNDARY  = aws_iam_policy.env_boundary.arn
   }
   table_rw = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query", "dynamodb:Scan"]
 }
@@ -43,8 +44,14 @@ data "aws_iam_policy_document" "api" {
     resources = ["${aws_s3_bucket.uploads.arn}/uploads/*"]
   }
   statement {
-    actions   = ["states:StartExecution"]
-    resources = [aws_sfn_state_machine.provision.arn, aws_sfn_state_machine.delete.arn, aws_sfn_state_machine.redeploy.arn]
+    actions = ["states:StartExecution"]
+    resources = [aws_sfn_state_machine.provision.arn, aws_sfn_state_machine.delete.arn, aws_sfn_state_machine.redeploy.arn,
+    aws_sfn_state_machine.repair.arn]
+  }
+  statement {
+    sid       = "RecheckNow" # D-186: POST /environments/{id}/recheck
+    actions   = ["lambda:InvokeFunction"]
+    resources = [aws_lambda_function.worker.arn]
   }
   statement {
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
@@ -81,6 +88,9 @@ resource "aws_lambda_function" "api" {
       PROVISION_SFN_ARN = aws_sfn_state_machine.provision.arn
       DELETE_SFN_ARN    = aws_sfn_state_machine.delete.arn
       REDEPLOY_SFN_ARN  = aws_sfn_state_machine.redeploy.arn
+      REPAIR_SFN_ARN    = aws_sfn_state_machine.repair.arn
+      WORKER_FUNCTION   = aws_lambda_function.worker.function_name
+      AGENT_CLIENT_ID   = aws_cognito_user_pool_client.agent.id
     })
   }
   depends_on = [aws_cloudwatch_log_group.api_fn]
@@ -136,7 +146,51 @@ data "aws_iam_policy_document" "worker" {
     resources = [
       "arn:${data.aws_partition.current.partition}:cloudwatch:us-east-1:${local.account_id}:alarm:${local.prefix}-env-*",
       "arn:${data.aws_partition.current.partition}:sns:us-east-1:${local.account_id}:${local.prefix}-env-*",
+      "arn:${data.aws_partition.current.partition}:cloudwatch:${var.region}:${local.account_id}:alarm:${local.prefix}-env-*",
+      "arn:${data.aws_partition.current.partition}:sns:${var.region}:${local.account_id}:${local.prefix}-env-*",
     ]
+  }
+  statement {
+    sid = "InspectAndDisableServerlessFunctions" # D-65: concurrency 0 takes a failed endpoint offline
+    actions = ["lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:ListFunctionUrlConfigs", "lambda:GetPolicy",
+    "lambda:ListTags", "lambda:PutFunctionConcurrency"]
+    resources = [local.env_function_arn]
+  }
+  statement {
+    sid       = "InspectServerlessRoles"
+    actions   = ["iam:GetRole", "iam:ListRolePolicies", "iam:GetRolePolicy"]
+    resources = [local.env_role_arn]
+  }
+  statement {
+    sid       = "InspectServerlessEndpoints"
+    actions   = ["apigateway:GET"]
+    resources = ["${local.apigw_arn}/apis/*"]
+  }
+  statement {
+    sid       = "InspectServerlessImages"
+    actions   = ["ecr:DescribeRepositories"]
+    resources = [local.env_repository_arn]
+  }
+  statement {
+    sid       = "InspectLogRetention"
+    actions   = ["logs:DescribeLogGroups"]
+    resources = ["*"]
+  }
+  statement {
+    # Resource types per the ECS Service Authorization Reference (D-177), pinned by tests/test_worker_iam_map.py:
+    # DescribeServices -> service, DescribeTasks -> task, ListTasks -> container-instance (not task!), ListTagsForResource -> service.
+    sid     = "InspectContainerServices"
+    actions = ["ecs:DescribeServices", "ecs:ListTasks", "ecs:DescribeTasks", "ecs:ListTagsForResource"]
+    resources = ["arn:${data.aws_partition.current.partition}:ecs:${var.region}:${local.account_id}:service/${local.prefix}-*/*",
+      "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${local.account_id}:task/${local.prefix}-*/*",
+    "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${local.account_id}:container-instance/${local.prefix}-*/*"]
+  }
+  statement {
+    sid = "InspectContainerNetwork" # read-only APIs without resource-level permissions
+    actions = ["ecs:DescribeTaskDefinition", "elasticloadbalancing:DescribeTargetGroups", "elasticloadbalancing:DescribeLoadBalancers",
+      "elasticloadbalancing:DescribeTargetHealth", "ec2:DescribeSecurityGroups", "ec2:DescribeRouteTables",
+    "ec2:DescribeNetworkInterfaces"]
+    resources = ["*"]
   }
   statement {
     actions   = ["cloudtrail:GetTrailStatus"]
@@ -144,7 +198,12 @@ data "aws_iam_policy_document" "worker" {
   }
   statement {
     actions   = ["states:StartExecution"]
-    resources = [aws_sfn_state_machine.delete.arn]
+    resources = [aws_sfn_state_machine.delete.arn, aws_sfn_state_machine.repair.arn]
+  }
+  statement {
+    sid       = "RecheckFanOut" # D-186: the hourly sweep invokes itself once per running environment
+    actions   = ["lambda:InvokeFunction"]
+    resources = ["arn:${data.aws_partition.current.partition}:lambda:${var.region}:${local.account_id}:function:${local.prefix}-worker"]
   }
   statement {
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
@@ -179,7 +238,9 @@ resource "aws_lambda_function" "worker" {
   environment {
     # DELETE_SFN_ARN is read at runtime from the name to avoid a dependency cycle (worker ↔ state machine).
     variables = merge(local.common_env, {
-      DELETE_SFN_ARN = "arn:${data.aws_partition.current.partition}:states:${var.region}:${local.account_id}:stateMachine:${local.prefix}-delete"
+      DELETE_SFN_ARN  = "arn:${data.aws_partition.current.partition}:states:${var.region}:${local.account_id}:stateMachine:${local.prefix}-delete"
+      REPAIR_SFN_ARN  = "arn:${data.aws_partition.current.partition}:states:${var.region}:${local.account_id}:stateMachine:${local.prefix}-repair"
+      PLATFORM_PREFIX = local.prefix # CloudTrail calls by the platform's own roles are not drift
     })
   }
   depends_on = [aws_cloudwatch_log_group.worker_fn]
@@ -245,7 +306,7 @@ resource "aws_apigatewayv2_authorizer" "jwt" {
   identity_sources = ["$request.header.Authorization"]
   name             = "cognito"
   jwt_configuration {
-    audience = [aws_cognito_user_pool_client.web.id]
+    audience = [aws_cognito_user_pool_client.web.id, aws_cognito_user_pool_client.agent.id]
     issuer   = "https://cognito-idp.${var.region}.amazonaws.com/${aws_cognito_user_pool.users.id}"
   }
 }
@@ -262,6 +323,7 @@ locals {
     "GET /presets", "GET /me", "POST /recommendations", "POST /environments", "GET /environments",
     "GET /environments/{env_id}", "POST /environments/{env_id}/upload-url", "POST /environments/{env_id}/approve",
     "POST /environments/{env_id}/extend", "POST /environments/{env_id}/retry", "POST /environments/{env_id}/redeploy",
+    "POST /environments/{env_id}/recheck", "POST /environments/{env_id}/repair", # D-186
     "DELETE /environments/{env_id}",
   ]
 }

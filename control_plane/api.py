@@ -9,9 +9,11 @@ import tempfile
 import traceback
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from platform_core import baseline, templates
+from platform_core.blueprints import for_architecture, for_env
 from platform_core.engine import InputError, RawInput, recommend
 from platform_core.engine import constants as C
 from platform_core.engine.admission import admit
@@ -19,6 +21,7 @@ from platform_core.presets import PRESETS
 from platform_core.pricing import PriceTable
 from platform_core.production_ready import CHECK_TITLES, checks_for
 from platform_core.validation.artifact import MAX_BUNDLE_BYTES, bundle_summary, index_sha256, validate_static_bundle
+from platform_core.validation.image import validate_image_spec
 
 from .store import Store, new_env_id, now
 
@@ -27,9 +30,16 @@ UPLOAD_BUCKET = os.environ.get("UPLOAD_BUCKET", "")
 PROVISION_SFN = os.environ.get("PROVISION_SFN_ARN", "")
 DELETE_SFN = os.environ.get("DELETE_SFN_ARN", "")
 REDEPLOY_SFN = os.environ.get("REDEPLOY_SFN_ARN", "")
+REPAIR_SFN = os.environ.get("REPAIR_SFN_ARN", "")
+WORKER_FUNCTION = os.environ.get("WORKER_FUNCTION", "")
 
-_s3 = boto3.client("s3")
+# Browsers upload straight to S3 with the presigned POST, so the URL must be the Regional virtual-hosted endpoint.
+# The default (global s3.amazonaws.com) is 307-redirected for new buckets outside us-east-1, and a cross-origin
+# upload that is redirected fails CORS in the browser ("Failed to fetch").
+_s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"),
+                   config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}))
 _sfn = boto3.client("stepfunctions")
+_lambda = boto3.client("lambda")
 _store = None
 
 
@@ -51,12 +61,22 @@ def resp(status: int, body) -> dict:
             "body": json.dumps(body, ensure_ascii=False, default=str)}
 
 
+AGENT_CLIENT_ID = os.environ.get("AGENT_CLIENT_ID", "")
+# D-181: what a token issued to the agent's Cognito client may call. Everything else (approve, delete, retry, redeploy,
+# extend) changes AWS or spends money and stays with a person in the UI. Allowlist, so a new route is human-only.
+AGENT_ROUTES = {"GET /presets", "GET /me", "POST /recommendations", "POST /environments", "GET /environments",
+                "GET /environments/{env_id}", "POST /environments/{env_id}/upload-url",
+                "POST /environments/{env_id}/recheck"}  # a recheck only reads; repair stays human (D-186)
+
+
 def caller(event) -> dict:
     claims = event["requestContext"]["authorizer"]["jwt"]["claims"]
     groups = claims.get("cognito:groups", "")
     if isinstance(groups, str):
         groups = [g for g in groups.strip("[]").replace(",", " ").split() if g]
-    return {"sub": claims["sub"], "email": claims.get("email", ""), "admin": "admin" in groups}
+    agent = bool(AGENT_CLIENT_ID) and AGENT_CLIENT_ID in (claims.get("aud"), claims.get("client_id"))
+    # An agent token never carries admin power, even when the person behind it is an admin.
+    return {"sub": claims["sub"], "email": claims.get("email", ""), "admin": "admin" in groups and not agent, "agent": agent}
 
 
 def body(event) -> dict:
@@ -89,6 +109,21 @@ def load_env(env_id: str, who: dict) -> dict:
 
 def public_view(env: dict) -> dict:
     return {k: v for k, v in env.items() if k not in ("execution_arn",)}
+
+
+INTERNAL_FAILURE_FIELDS = ("image_build_error", "terraform_error")
+
+
+def viewer_payload(payload: dict, who: dict) -> dict:
+    """Raw failure detail (Step Functions error, CodeBuild phases, terraform output) is for admins and logs;
+    the owner sees the stage and the plain message."""
+    env = payload.get("environment")
+    if who["admin"] or not isinstance(env, dict):
+        return payload
+    env = {k: v for k, v in env.items() if k not in INTERNAL_FAILURE_FIELDS}
+    if env.get("failure"):
+        env["failure"] = {k: env["failure"][k] for k in ("stage", "message", "at") if k in env["failure"]}
+    return {**payload, "environment": env}
 
 
 def _recommend(inp: dict) -> dict:
@@ -134,7 +169,18 @@ def get_presets(event, who):
 
 def _with_checks(rec: dict) -> dict:
     rec["production_ready_checks"] = checks_for(rec.get("architecture", {}).get("candidate_id", ""))
+    bp = for_architecture(rec.get("architecture")) if rec.get("provisionable") else None
+    rec["artifact_kind"] = bp.artifact if bp else None  # what the UI asks for: a site zip or a container image
+    rec["blueprint"] = bp.key if bp else None
     return rec
+
+
+def image_artifact(spec: dict, revision: int = 1) -> dict:
+    """Serverless input (D-166): validated at creation, there is no upload to inspect later."""
+    checks, norm = validate_image_spec(spec or {})
+    return {"kind": "IMAGE", "revision": int(revision), "image": norm["image"], "env": norm["env"],
+            "health_path": norm["health_path"], "checks": [c.to_dict() for c in checks],
+            "passed": all(c.status != "FAIL" for c in checks), "validated_at": now()}
 
 
 def get_me(event, who):
@@ -154,6 +200,8 @@ def post_environment(event, who):
         raise HttpError(400, "name is required")
     inp, rec = _requirements(b)
     override = None
+    if b.get("budget_override") and who.get("agent"):
+        raise HttpError(403, "예산 초과 동의는 사람이 화면에서 해야 합니다.", human_action_required=True)
     if b.get("budget_override"):
         # D-158: only an explicit confirmation of a SOFT budget excess is recorded; hard guards still apply at approval.
         if rec.get("status") != "OVER_BUDGET":
@@ -162,25 +210,39 @@ def post_environment(event, who):
                     "cost_upper_usd": rec["cost"]["upper_usd"],
                     "excess_upper_usd": rec["cost"]["upper_usd"] - rec["cost"]["budget_usd"],
                     "confirmed_by": who["email"] or who["sub"], "at": now()}
+    bp = for_architecture(rec.get("architecture")) if rec.get("provisionable") else None
+    artifact = None
+    if bp and bp.artifact == "IMAGE":
+        artifact = image_artifact(b.get("image") or {})
+        if not artifact["passed"]:
+            raise HttpError(400, "컨테이너 이미지 설정이 검사를 통과하지 못했습니다.", artifact=artifact)
     env_id = new_env_id()
     env = {
-        "env_id": env_id, "name": name, "owner_sub": who["sub"], "owner_email": who["email"],
+        "env_id": env_id, "name": name, "owner_sub": who["sub"], "owner_email": who["email"], "artifact": artifact,
         "status": "DRAFT", "tier": inp["tier"], "created_at": now(), "updated_at": now(),
         "input": inp, "recommendation": rec, "origin": rec["origin"],
         "cost_upper_usd": int(rec.get("cost", {}).get("upper_usd") or 0),
         "budget_override": override,
-        "event_log": [{"at": now(), "status": "DRAFT", "message": "추천 결과와 함께 환경 초안을 만들었습니다."}]
+        "created_via": "agent" if who.get("agent") else "ui",
+        "event_log": [{"at": now(), "status": "DRAFT", "message": "Claude Code agent가 추천 결과와 함께 환경 초안을 만들었습니다. "
+                       "사람이 화면에서 승인해야 AWS 리소스가 만들어집니다." if who.get("agent")
+                       else "추천 결과와 함께 환경 초안을 만들었습니다."}]
         + ([{"at": now(), "status": "DRAFT", "message": f"예산(월 ${override['budget_usd']})을 넘는 것을 확인하고 진행합니다 "
              f"(최대 월 ${override['cost_upper_usd']})."}] if override else []),
     }
     store().put(env)
-    return 201, {"environment": public_view(env), "upload": upload_form(env_id, 1) if rec.get("provisionable") else None}
+    return 201, {"environment": public_view(env), "upload": upload_form(env_id, 1) if bp and bp.artifact == "STATIC_ZIP" else None}
 
 
 def post_upload_url(event, who):
     env = load_env(event["pathParameters"]["env_id"], who)
+    bp = for_env(env)
+    if bp is None or bp.artifact != "STATIC_ZIP":
+        raise HttpError(409, "이 환경은 파일 업로드가 아니라 컨테이너 이미지를 사용합니다.")
     if env["status"] == "DRAFT":
         return 200, {"upload": upload_form(env["env_id"], 1), "revision": 1}
+    if who.get("agent"):  # a new revision of a running site is a redeploy: a person does that
+        raise HttpError(403, "운영 중인 환경의 새 버전은 사람이 화면에서 올려야 합니다.", human_action_required=True)
     if env["status"] not in ("READY", "DEGRADED") and not _redeploy_failed(env):
         raise HttpError(409, f"cannot upload in status {env['status']}")
     rev = next_revision(env)
@@ -204,6 +266,9 @@ def _validate_artifact(env_id: str, revision: int = 1) -> dict:
 
 
 def _revision_record(artifact: dict, who: dict, note: str = "") -> dict:
+    if artifact.get("kind") == "IMAGE":
+        return {"revision": artifact["revision"], "key": artifact["image"], "root": "", "uploaded_by": who["email"] or who["sub"],
+                "uploaded_at": artifact["validated_at"], "files": artifact["image"], "status": "DEPLOYING", "note": note}
     files = next((c["detail"] for c in artifact["checks"] if c["check_id"] == "ART-SIZE"), "")
     return {"revision": artifact["revision"], "key": artifact["key"], "root": artifact["root"],
             "uploaded_by": who["email"] or who["sub"], "uploaded_at": artifact["validated_at"], "files": files,
@@ -242,10 +307,18 @@ def post_approve(event, who):
     elif env["status"] != "DRAFT":
         raise HttpError(409, f"cannot approve in status {env['status']}")
 
-    artifact = _validate_artifact(env["env_id"], 1)
-    store().update(env["env_id"], artifact=artifact)
-    if not artifact["passed"]:
-        raise HttpError(422, "업로드한 파일이 검사를 통과하지 못했습니다.", artifact=artifact)
+    bp = for_env(env)
+    if bp is not None and bp.artifact == "IMAGE":
+        artifact = image_artifact({"image": (env.get("artifact") or {}).get("image"), "env": (env.get("artifact") or {}).get("env"),
+                                   "health_path": (env.get("artifact") or {}).get("health_path")})
+        store().update(env["env_id"], artifact=artifact)
+        if not artifact["passed"]:
+            raise HttpError(422, "컨테이너 이미지 설정이 검사를 통과하지 못했습니다.", artifact=artifact)
+    else:
+        artifact = _validate_artifact(env["env_id"], 1)
+        store().update(env["env_id"], artifact=artifact)
+        if not artifact["passed"]:
+            raise HttpError(422, "업로드한 파일이 검사를 통과하지 못했습니다.", artifact=artifact)
 
     s = store()
     blocks = admit(rec, owner_envs=s.list_owner(env["owner_sub"]), all_envs=s.list_all(), env_id=env["env_id"],
@@ -279,7 +352,7 @@ def delete_environment(event, who):
         _delete_uploads(env["env_id"])
         updated = store().update(env["env_id"], expect_status=(st,), status="DELETED", event="생성 전에 삭제했습니다.")
         return 200, {"environment": public_view(updated)}
-    if st not in ("READY", "DEGRADED", "FAILED", "DELETE_FAILED"):
+    if st not in ("READY", "DEGRADED", "DRIFTED", "FAILED", "DELETE_FAILED"):
         raise HttpError(409, f"cannot delete in status {st}")
     updated = store().update(env["env_id"], expect_status=(st,), status="DELETING", event="삭제를 시작합니다.")
     store().update(env["env_id"], execution_arn=_start(updated, DELETE_SFN, "delete"))
@@ -294,7 +367,8 @@ def post_redeploy(event, who):
     st = env["status"]
     if st not in ("READY", "DEGRADED") and not _redeploy_failed(env):
         raise HttpError(409, f"사용 중인 환경(READY/DEGRADED)만 다시 배포할 수 있습니다. 현재 상태: {st}")
-    if env["recommendation"]["architecture"]["candidate_id"] != "NONE+NONE":
+    bp = for_env(env)
+    if bp is None or not bp.redeploy:
         raise HttpError(409, "재배포는 정적 사이트 환경만 지원합니다.")
     b = body(event)
     known = {r["revision"]: r for r in env.get("revisions") or []}
@@ -332,6 +406,7 @@ def post_retry(event, who):
     if env["status"] != "FAILED" or failure.get("stage") == "PLAN":
         raise HttpError(409, "생성 단계에서 실패한 환경만 다시 시도할 수 있습니다(보안 기준 위반은 재시도 대상이 아님).")
     updated = store().update(env["env_id"], expect_status=("FAILED",), status="PROVISIONING", plan_rejected=False,
+                             image_build_failed=False, terraform_prepare_failed=False, terraform_error="",
                              event="다시 시도합니다.")
     store().update(env["env_id"], execution_arn=_start(updated, PROVISION_SFN, "retry"))
     return 202, {"environment": public_view(updated)}
@@ -339,7 +414,7 @@ def post_retry(event, who):
 
 def post_extend(event, who):
     env = load_env(event["pathParameters"]["env_id"], who)
-    if env["tier"] != "DEV" or not env.get("expires_at") or env["status"] not in ("READY", "DEGRADED"):
+    if env["tier"] != "DEV" or not env.get("expires_at") or env["status"] not in ("READY", "DEGRADED", "DRIFTED"):
         raise HttpError(409, "개발 환경(READY/DEGRADED)만 연장할 수 있습니다.")
     base = max(dt.datetime.now(dt.UTC), dt.datetime.fromisoformat(env["expires_at"].replace("Z", "+00:00")))
     limit = dt.datetime.now(dt.UTC) + dt.timedelta(days=4 * C.TTL_DAYS_DEV)
@@ -348,12 +423,46 @@ def post_extend(event, who):
     return 200, {"environment": public_view(updated)}
 
 
+def post_recheck(event, who):
+    """Day-2 (D-186): run the environment's checks again now, instead of waiting for the hourly sweep."""
+    env = load_env(event["pathParameters"]["env_id"], who)
+    if env["status"] not in ("READY", "DEGRADED", "DRIFTED"):
+        raise HttpError(409, f"사용 중인 환경만 다시 검사할 수 있습니다. 현재 상태: {env['status']}")
+    _lambda.invoke(FunctionName=WORKER_FUNCTION, InvocationType="Event",
+                   Payload=json.dumps({"action": "recheck", "env_id": env["env_id"], "trigger": "MANUAL"}).encode())
+    store().update(env["env_id"], event=f"{'agent' if who.get('agent') else (who['email'] or who['sub'])}의 요청으로 다시 검사합니다.")
+    return 202, {"environment": public_view(store().get(env["env_id"]))}
+
+
+def post_repair(event, who):
+    """Day-2 (D-186): a person approves the prepared repair plan; exactly that saved plan is applied, then validated."""
+    env = load_env(event["pathParameters"]["env_id"], who)
+    if env["status"] != "DRIFTED":
+        raise HttpError(409, f"설정 변경이 감지된 환경만 복구할 수 있습니다. 현재 상태: {env['status']}")
+    plan = env.get("repair_plan") or {}
+    if not plan.get("stacks"):
+        raise HttpError(409, "수정안을 아직 만들고 있습니다. 잠시 뒤 다시 시도해 주세요." if not plan.get("error") else plan["error"])
+    if not plan.get("passed"):
+        raise HttpError(409, "수정안이 보안 검사를 통과하지 못해 적용할 수 없습니다. 관리자에게 알려 주세요.")
+    if not plan.get("changes"):
+        raise HttpError(409, "Terraform으로 되돌릴 차이가 없습니다. 관리자 확인이 필요합니다.")
+    if plan.get("created_at", "") < (env.get("drift") or {}).get("detected_at", ""):
+        raise HttpError(409, "마지막 변경 감지 이후의 수정안이 아닙니다. 새 수정안을 기다려 주세요.")
+    updated = store().update(env["env_id"], expect_status=("DRIFTED",), status="REPAIRING",
+                             repair_approved_by=who["email"] or who["sub"], repair_approved_at=now(),
+                             event=f"수정안(리소스 {plan['changes']}개)을 승인했습니다. 원래 구성으로 되돌립니다.")
+    ex = _sfn.start_execution(stateMachineArn=REPAIR_SFN, name=f"{env['env_id']}-repair-apply-{int(dt.datetime.now().timestamp())}",
+                              input=json.dumps({"env_id": env["env_id"], "phase": "apply"}))
+    store().update(env["env_id"], execution_arn=ex["executionArn"])
+    return 202, {"environment": public_view(updated)}
+
+
 def list_environments(event, who):
     qs = event.get("queryStringParameters") or {}
     envs = store().list_all() if (who["admin"] and qs.get("all") == "1") else store().list_owner(who["sub"])
     envs.sort(key=lambda e: e.get("created_at", ""), reverse=True)
     slim = [{k: e.get(k) for k in ("env_id", "name", "status", "tier", "created_at", "expires_at", "cost_upper_usd",
-                                   "owner_email")} | {"url": (e.get("outputs") or {}).get("url"),
+                                   "owner_email", "created_via")} | {"url": (e.get("outputs") or {}).get("url"),
                                                       "candidate_id": e["recommendation"].get("architecture", {}).get("candidate_id")}
             for e in envs if e["status"] != "DELETED" or qs.get("deleted") == "1"]
     return 200, {"environments": slim}
@@ -375,6 +484,8 @@ ROUTES = {
     "POST /environments/{env_id}/extend": post_extend,
     "POST /environments/{env_id}/retry": post_retry,
     "POST /environments/{env_id}/redeploy": post_redeploy,
+    "POST /environments/{env_id}/recheck": post_recheck,
+    "POST /environments/{env_id}/repair": post_repair,
     "DELETE /environments/{env_id}": delete_environment,
 }
 
@@ -384,8 +495,12 @@ def handler(event, context):
     if route is None:
         return resp(404, {"error": "not found"})
     try:
-        status, payload = route(event, caller(event))
-        return resp(status, payload)
+        who = caller(event)
+        if who["agent"] and event.get("routeKey") not in AGENT_ROUTES:
+            raise HttpError(403, "이 작업은 사람이 화면에서 직접 해야 합니다. agent는 초안 생성과 조회까지만 할 수 있습니다.",
+                            human_action_required=True)
+        status, payload = route(event, who)
+        return resp(status, viewer_payload(payload, who))
     except HttpError as e:
         return resp(e.status, {"error": e.message, **e.extra})
     except ClientError as e:

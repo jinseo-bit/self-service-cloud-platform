@@ -131,9 +131,13 @@ const STATUS = {
   DRAFT: ["초안", ""], PENDING_ADMIN_APPROVAL: ["관리자 승인 대기", "warn"], PROVISIONING: ["생성 중", "run"],
   VALIDATING: ["검증 중", "run"], READY: ["사용 가능", "ok"], DEGRADED: ["점검 필요", "warn"], FAILED: ["실패", "bad"],
   DELETING: ["삭제 중", "run"], DELETED: ["삭제됨", ""], DELETE_FAILED: ["삭제 실패", "bad"], REDEPLOYING: ["새 버전 배포 중", "run"],
+  DRIFTED: ["설정 변경 감지", "warn"], REPAIRING: ["복구 중", "run"],  // Day-2 (D-186)
 };
 const badge = (s) => `<span class="badge ${STATUS[s]?.[1] || ""}">${esc(STATUS[s]?.[0] || s)}</span>`;
-const IN_PROGRESS = new Set(["PROVISIONING", "VALIDATING", "DELETING", "REDEPLOYING"]);
+const IN_PROGRESS = new Set(["PROVISIONING", "VALIDATING", "DELETING", "REDEPLOYING", "REPAIRING"]);
+// Blueprint names by how the app runs (D-182): Fargate is serverless too, so "Serverless vs Container" was ambiguous.
+const RUN_MODEL = { STATIC: "정적 호스팅", SLS: "요청 단위 실행", SLS_PC: "요청 단위 실행", CTR: "상시 실행 컨테이너" };
+const runModel = (a) => [a.frontend === "STATIC" ? RUN_MODEL.STATIC : null, RUN_MODEL[a.compute]].filter(Boolean).join(" + ");
 const NODE = {
   STATIC: ["CloudFront + S3", "화면 파일 CDN"], SLS: ["Lambda + API Gateway", "요청 시에만 실행"],
   SLS_PC: ["Lambda (미리 준비) + API Gateway", "첫 요청 지연 없음"], CTR: ["ECS Fargate", "컨테이너 상시 실행"],
@@ -152,7 +156,7 @@ const QUESTIONS = [
     when: (s) => s.app_form !== "STATIC_SITE", options: [
     ["realtime_connection", "실시간 연결", "채팅, 실시간 알림처럼 연결을 계속 유지"],
     ["large_payload", "큰 파일 업로드·다운로드", "한 번에 6MB가 넘는 요청이나 응답"],
-    ["in_memory_state", "서버 메모리에 상태 보관", "로그인 상태 등을 서버 메모리에 저장"]] },
+    ["in_memory_state", "서버 메모리·로컬 디스크에 상태 보관", "로그인 상태나 업로드 파일을 서버 안에 두고 다음 요청에서 다시 씀"]] },
   { key: "request_duration", title: "가장 오래 걸리는 요청은 얼마나 걸리나요?",
     desc: "버튼을 누르고 결과가 나올 때까지 걸리는 시간 중 가장 긴 것 하나를 골라 주세요.", when: (s) => s.app_form !== "STATIC_SITE", options: [
     ["SECONDS", "대부분 몇 초 안에 끝나요", ""], ["ABOUT_30S", "30초 정도 걸리는 작업도 있어요", ""],
@@ -222,7 +226,7 @@ function examplesBlock(q, w) {
 }
 
 // ------------------------------------------------------------------ state
-const S = { me: null, presets: [], templates: [], baseline: [], checkTitles: {}, envs: [], wizard: null, poll: null };
+const S = { me: null, templates: [], baseline: [], checkTitles: {}, envs: [], wizard: null, poll: null };
 const LAYER_ORDER = ["ARTIFACT", "PLAN", "STATE", "HTTP"];
 // Internal ids (reason codes, SB/PR check ids) are for reviewers; regular users only see sentences.
 const isReviewer = () => !!S.me?.admin;
@@ -232,7 +236,7 @@ const isLocalSkip = (c) => c.status === "NOT_APPLICABLE" && /^로컬 모드/.tes
 const archLabel = (a) => {
   if (!a) return "-";
   const parts = [];
-  if (a.frontend === "STATIC") parts.push("정적 사이트 (CloudFront + 비공개 S3)");
+  if (a.frontend === "STATIC") parts.push("정적 호스팅 (CloudFront + 비공개 S3)");
   if (a.compute && a.compute !== "NONE") parts.push(NODE[a.compute][0]);
   if (a.db && a.db !== "NONE") parts.push(NODE[a.db][0]);
   return parts.join(" + ") || a.candidate_id;
@@ -246,6 +250,15 @@ function wizardDefaults(preset) {
     downtime_tolerance: i.downtime_tolerance, latency_sensitivity: i.latency_sensitivity, exposure: i.exposure,
     cidrs: "", tier: i.tier, budget: i.budget_usd_month, name: "", spa: false, step: 0, request_duration: "SECONDS",
     dirty: false, examplesOpen: {}, budgetOverride: null, lastAdjust: null,
+  };
+}
+
+// 내 앱에 맞게 만들기 (D-178, D-187): start from no answers. Every single-choice question is answered by the user, never pre-filled.
+function blankWizard() {
+  return {
+    ...wizardDefaults({ id: null, input: { tier: "DEV", budget_usd_month: "" } }),
+    app_form: null, request_duration: null, traffic_scale: null, traffic_pattern: null, data: null,
+    downtime_tolerance: null, latency_sensitivity: null, exposure: null, mode: "custom",
   };
 }
 
@@ -397,9 +410,9 @@ function startPage() {
   $app.innerHTML = shell(h`<div class="page narrow">
     <div class="eyebrow">새 환경</div><h1>어떻게 만들까요?</h1>
     <div class="choices modes">
-      <a class="choice mode" href="#/new/custom"><span><span class="c-title">맞춤형으로 만들기</span>
+      <a class="choice mode" href="#/new/custom"><span><span class="c-title">내 앱에 맞게 만들기</span>
         <span class="c-desc">몇 가지 질문에 답하면 비용, 보안, 가용성을 고려해서 알맞은 클라우드 구성을 추천해드려요.</span></span></a>
-      ${quick ? `<a class="choice mode" href="#/new/quick"><span><span class="c-title">빠르게 시작하기</span>
+      ${quick ? `<a class="choice mode" href="#/new/quick"><span><span class="c-title">템플릿으로 시작하기</span>
         <span class="c-desc">만들고 싶은 서비스가 정해져 있다면 준비된 구성으로 바로 시작할 수 있어요.</span></span></a>` : ""}
     </div></div>`);
   bindShell();
@@ -410,7 +423,7 @@ function templatePage() {
     <button class="choice" data-template="${esc(t.template_id)}"><span class="radio" aria-hidden="true"></span>
       <span><span class="c-title">${esc(t.title)}</span><span class="c-desc">${esc(t.short_description)}</span></span></button>`).join("");
   $app.innerHTML = shell(h`<div class="page narrow">
-    <div class="eyebrow">빠르게 시작하기</div><h1>무엇을 만들까요?</h1>
+    <div class="eyebrow">템플릿으로 시작하기</div><h1>무엇을 만들까요?</h1>
     <p class="lead">목적만 고르면 나머지 요구사항은 준비된 값으로 채워요. 검토 화면에서 언제든 바꿀 수 있어요.</p>
     <div class="choices">${list}</div>
     <div class="wizard-foot"><a class="btn lg back" href="#/new">이전</a></div></div>`);
@@ -427,7 +440,7 @@ function quickFormPage() {
   if (!t) { location.hash = "#/new/quick"; return; }
   const tiers = [["DEV", "개발 · 테스트용", "7일 뒤 자동 삭제(연장 가능)"], ["PROD", "실제 운영용", "관리자 승인 후 생성, 자동 삭제 없음"]].filter(([v]) => t.supported_tiers.includes(v));
   $app.innerHTML = shell(h`<div class="page narrow">
-    <div class="eyebrow">빠르게 시작하기</div><h1 id="q-title">${esc(t.title)}</h1>
+    <div class="eyebrow">템플릿으로 시작하기</div><h1 id="q-title">${esc(t.title)}</h1>
     <p class="lead">${esc(t.short_description)}</p>
     <div class="field"><label for="name">환경 이름</label><input class="input" id="name" maxlength="60" placeholder="예: 내 포트폴리오" value="${esc(w.name)}" required>
       <span class="help">목록에서 알아보기 쉬운 이름이면 돼요. (60자 이내)</span></div>
@@ -453,22 +466,6 @@ function quickFormPage() {
     if (showErrors(errs)) return;
     location.hash = "#/new/review";
   };
-}
-
-function presetPage() {
-  const list = S.presets.map((p) => h`
-    <button class="choice" data-preset="${esc(p.id)}"><span class="radio"></span>
-      <span><div class="c-title">${esc(p.title)}</div><div class="c-desc">${esc(p.description)}</div></span></button>`).join("");
-  $app.innerHTML = shell(h`<div class="page narrow">
-    <div class="eyebrow">새 환경</div><h1>어떤 걸 만드시나요?</h1>
-    <p class="lead">가장 비슷한 것을 고르면 답을 미리 채워 드려요. 다음 화면에서 모두 바꿀 수 있어요.</p>
-    <div class="choices">${list}</div>
-    <div class="wizard-foot"><a class="btn lg back" href="#/new">이전</a></div></div>`);
-  bindShell();
-  document.querySelectorAll("[data-preset]").forEach((b) => (b.onclick = () => {
-    S.wizard = wizardDefaults(S.presets.find((p) => p.id === b.dataset.preset));
-    location.hash = "#/new/q";
-  }));
 }
 
 function showErrors(errs) {
@@ -499,6 +496,7 @@ function questionPage() {
   const qs = visibleQuestions(w);
   w.step = Math.min(w.step, qs.length - 1);
   const q = qs[w.step];
+  const answered = q.custom || q.multi || w[q.key] != null;
   let body;
   if (q.custom) {
     body = h`
@@ -533,7 +531,7 @@ function questionPage() {
     ${q.custom ? "" : examplesBlock(q, w)}
     <div class="wizard-foot">
       <button class="btn lg back" id="back">이전</button>
-      <button class="btn primary lg" id="next">${q.custom ? "추천 받기" : "다음"}</button>
+      <button class="btn primary lg" id="next" ${answered ? "" : "disabled"}>${q.custom ? "추천 받기" : "다음"}</button>
     </div></div>`);
   bindShell();
   document.querySelectorAll("[data-v]").forEach((b) => (b.onclick = () => {
@@ -558,7 +556,7 @@ function questionPage() {
     const c = document.getElementById("cidrs"); if (c) w.cidrs = c.value;
   }
   document.getElementById("cidrs")?.addEventListener("input", (e) => (w.cidrs = e.target.value));
-  document.getElementById("back").onclick = () => { capture(); if (w.step === 0) location.hash = "#/new/custom"; else { w.step--; questionPage(); } };
+  document.getElementById("back").onclick = () => { capture(); if (w.step === 0) location.hash = "#/new"; else { w.step--; questionPage(); } };
   document.getElementById("next").onclick = () => {
     capture();
     if (q.custom) {
@@ -583,13 +581,25 @@ function reasonList(items, cls = "") {
   return `<ul class="reasons">${(items || []).map((r) => `<li class="${cls}"><span class="dot"></span><span>${esc(r.message)}${codeTag(r.code)}</span></li>`).join("")}</ul>`;
 }
 
+// The request path each blueprint actually builds: Static = CloudFront → S3 (D-31), Serverless = HTTP API → Lambda
+// running the image + Lambda Web Adapter (D-165, no CloudFront), Container = CloudFront → VPC origin → internal ALB → Fargate (D-33).
+const PATH_NODE = {
+  CF: ["CloudFront", "HTTPS · 보안 헤더"], HTTP_API: ["API Gateway (HTTP API)", "HTTPS 주소"],
+  ALB: ["내부 ALB", "CloudFront로만 연결 (VPC Origin)"], IMAGE_LWA: ["컨테이너 이미지", "+ Lambda Web Adapter"],
+  LAMBDA: ["Lambda", "요청 시에만 실행"], LAMBDA_PC: ["Lambda (미리 준비)", "첫 요청 지연 없음"],
+};
+
+function archPath(a) {
+  if (a.frontend === "STATIC") return [PATH_NODE.CF, ["S3 (비공개)", "화면 파일"], ...(a.compute !== "NONE" ? [NODE[a.compute]] : [])];
+  if (a.compute === "SLS" || a.compute === "SLS_PC")
+    return [PATH_NODE.HTTP_API, a.compute === "SLS" ? PATH_NODE.LAMBDA : PATH_NODE.LAMBDA_PC, PATH_NODE.IMAGE_LWA];
+  if (a.compute === "CTR") return [PATH_NODE.CF, PATH_NODE.ALB, NODE.CTR];
+  return [];
+}
+
 function archDiagram(a) {
   if (!a) return "";
-  const nodes = [];
-  nodes.push(["사용자", "브라우저"]);
-  nodes.push(["CloudFront", "HTTPS · 보안 헤더"]);
-  if (a.frontend === "STATIC") nodes.push(["S3 (비공개)", "화면 파일"]);
-  if (a.compute !== "NONE") nodes.push(NODE[a.compute]);
+  const nodes = [["사용자", "브라우저"], ...archPath(a)];
   if (a.db !== "NONE") nodes.push(NODE[a.db]);
   return `<div class="arch">${nodes.map((n, i) => `${i ? '<span class="edge">→</span>' : ""}<div class="node"><b>${esc(n[0])}</b><span>${esc(n[1])}</span></div>`).join("")}</div>`;
 }
@@ -770,7 +780,7 @@ function quickReview(t, rec, w, blocked) {
   const ttl = w.tier === "DEV" ? "만든 날로부터 7일 뒤 자동 삭제돼요. 필요하면 7일씩 연장할 수 있어요." : "운영 환경은 자동으로 삭제되지 않아요.";
   return h`
     ${w.lastAdjust ? adjustedBanner(w.lastAdjust, rec) : ""}
-    <div class="eyebrow">빠르게 시작하기 · 검토</div><h1>${esc(t.title.replace(/ 만들기$/, ""))}</h1>
+    <div class="eyebrow">템플릿으로 시작하기 · 검토</div><h1>${esc(t.title.replace(/ 만들기$/, ""))}</h1>
     <p class="lead">${esc(w.name)} · ${w.tier === "PROD" ? "실제 운영용" : "개발·테스트용"}</p>
     <div class="card" data-quick-review><h2>사용할 구성</h2>
       <ul class="components">${t.components.map((c) => `<li><b>${esc(c.service)}</b><span aria-hidden="true">→</span><span>${esc(c.role)}</span></li>`).join("")}</ul>
@@ -810,7 +820,7 @@ async function reviewPage() {
     if (tpl) top = quickReview(tpl, rec, w, blocked);
     else top = h`
       ${w.lastAdjust ? adjustedBanner(w.lastAdjust, rec) : ""}
-      <div class="eyebrow">추천 결과</div><h1>${rec.architecture.compute === "NONE" ? "정적 사이트 구성을 추천해요" : "이 구성을 추천해요"}</h1>
+      <div class="eyebrow">추천 결과</div><h1>${esc(runModel(rec.architecture) || "이")} 구성을 추천해요</h1>
       <p class="lead">${esc(w.name)} · ${w.tier === "PROD" ? "실제 운영용" : "개발·테스트용"}</p>
       <div class="card"><h2>구성</h2>${archDiagram(rec.architecture)}<h3>이렇게 고른 이유</h3>${reasonList(rec.reasons)}
         ${rec.policies?.length ? `<h3 style="margin-top:16px">적용되는 설정</h3>${reasonList(rec.policies)}` : ""}
@@ -823,16 +833,17 @@ async function reviewPage() {
   }
   const overridden = rec.status === "OVER_BUDGET" && !!w.budgetOverride;
   const canProvision = (ok || overridden) && rec.provisionable;
+  const isImage = artifactKind(rec) === "IMAGE";
   $app.innerHTML = shell(h`<div class="page">${top}
     <div class="section card">
-      ${canProvision ? h`<h2>사이트 파일 올리기</h2><p class="muted small">빌드 결과 폴더(index.html 포함)를 zip으로 묶어 올려 주세요. 50MB 이하.</p>
-        <label class="drop" id="drop" for="file"><input type="file" id="file" class="sr-only" accept=".zip,application/zip"><span id="droptext">여기에 zip 파일을 끌어 놓거나 눌러서 고르세요</span></label>
+      ${canProvision ? h`${isImage ? imageForm(rec) : `<h2>사이트 파일 올리기</h2><p class="muted small">빌드 결과 폴더(index.html 포함)를 zip으로 묶어 올려 주세요. 50MB 이하.</p>
+        <label class="drop" id="drop" for="file"><input type="file" id="file" class="sr-only" accept=".zip,application/zip"><span id="droptext">여기에 zip 파일을 끌어 놓거나 눌러서 고르세요</span></label>`}
         <div class="help error" id="err" role="alert" style="margin-top:10px"></div>
         ${overridden ? `<p class="notice warn" style="margin-top:12px" data-override>예산 초과를 확인했어요 · 예산 월 ${usd(rec.cost.budget_usd)} → 최대 월 ${usd(rec.cost.upper_usd)}</p>` : ""}
-        <div class="action-bar"><span class="action-summary"><b>최대 ${usd(rec.cost.upper_usd)}/월</b><span class="muted small" id="filestate">파일을 골라 주세요</span></span>
+        <div class="action-bar"><span class="action-summary"><b>최대 ${usd(rec.cost.upper_usd)}/월</b><span class="muted small" id="filestate">${isImage ? "이미지 주소를 입력해 주세요" : "파일을 골라 주세요"}</span></span>
           <a class="btn lg back" href="${tpl ? "#/new/quick/form" : "#/new/q"}">수정</a><button class="btn primary lg" id="approve" disabled>${w.tier === "PROD" && !S.me?.admin ? "관리자에게 승인 요청" : tpl ? "이 구성으로 만들기" : "승인하고 만들기"}</button></div>`
-      : h`<div class="notice ${ok ? "warn" : "bad"}">${ok ? "이 구성은 설계되어 있지만 아직 플랫폼에서 만들 수 없어요. 지금은 정적 사이트만 생성할 수 있습니다."
-        : rec.status === "OVER_BUDGET" ? (rec.provisionable ? "예산에 맞게 조정하거나, 예산 초과를 확인하면 파일을 올릴 수 있어요." : "이 구성은 아직 플랫폼에서 만들 수 없어요. 지금은 정적 사이트만 생성할 수 있습니다.")
+      : h`<div class="notice ${ok ? "warn" : "bad"}">${ok ? "이 구성은 설계되어 있지만 아직 플랫폼에서 만들 수 없어요. 지금은 DB 없는 정적 호스팅, 요청 단위 실행(Lambda), 상시 실행 컨테이너(Fargate)만 만들 수 있어요."
+        : rec.status === "OVER_BUDGET" ? (rec.provisionable ? "예산에 맞게 조정하거나, 예산 초과를 확인하면 파일을 올릴 수 있어요." : "이 구성은 아직 플랫폼에서 만들 수 없어요. 지금은 DB 없는 정적 호스팅, 요청 단위 실행(Lambda), 상시 실행 컨테이너(Fargate)만 만들 수 있어요.")
         : "위에서 원인이 된 답변을 바꾼 뒤 다시 추천받아 주세요."}</div>
         <div class="wizard-foot"><a class="btn lg" href="#/new/q">요구사항 수정</a></div>`}
     </div></div>`);
@@ -840,7 +851,17 @@ async function reviewPage() {
   bindReviewActions(rec, w);
   if (!canProvision) return;
   let file = null;
-  const drop = document.getElementById("drop");
+  let image = null;
+  if (isImage) {
+    const field = document.getElementById("image");
+    const sync = () => {
+      document.getElementById("approve").disabled = !field.value.trim();
+      document.getElementById("filestate").textContent = field.value.trim() || "이미지 주소를 입력해 주세요";
+    };
+    field.addEventListener("input", sync);
+    sync();
+  }
+  const drop = document.getElementById("drop") || { classList: { add() {}, remove() {} } };
   const pick = (f) => {
     if (!f) return;
     const err = document.getElementById("err");
@@ -854,23 +875,29 @@ async function reviewPage() {
     document.getElementById("filestate").textContent = f.name;
     document.getElementById("approve").disabled = false;
   };
-  document.getElementById("file").onchange = (e) => pick(e.target.files[0]);
+  if (!isImage) document.getElementById("file").onchange = (e) => pick(e.target.files[0]);
   drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
   drop.ondragleave = () => drop.classList.remove("over");
   drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); pick(e.dataTransfer.files[0]); };
   document.getElementById("approve").onclick = async (ev) => {
     const btn = ev.currentTarget;
+    if (isImage) {
+      const parsed = readImageForm();
+      if (parsed.error) { document.getElementById("err").textContent = parsed.error; return; }
+      image = parsed.image;
+    }
     const needsAdmin = w.tier === "PROD" && !S.me?.admin;
     const ok = await modal({
       title: needsAdmin ? "관리자에게 승인을 요청할까요?" : "이 구성으로 만들까요?",
       confirm: needsAdmin ? "승인 요청" : tpl ? "이 구성으로 만들기" : "승인하고 만들기",
       body: h`<dl class="kv">
-        <dt>구성</dt><dd>${esc(rec.architecture.compute === "NONE" ? "정적 사이트 (CloudFront + 비공개 S3)" : rec.architecture.candidate_id)}</dd>
+        <dt>구성</dt><dd>${esc(archLabel(rec.architecture))}</dd>
         <dt>예상 비용</dt><dd>월 ${usd(rec.cost.rep_usd)} ~ 최대 ${usd(rec.cost.upper_usd)} (예산 ${usd(rec.cost.budget_usd)}) · 추정치${overridden ? " · <b>예산 초과 승인됨</b>" : ""}</dd>
         <dt>보안 기준</dt><dd>${rec.security_baseline.length}개 항목 항상 적용</dd>
         <dt>자동 검사</dt><dd>${(rec.production_ready_checks || []).length}개 항목 · 보안 실패 시 접속 차단</dd>
         <dt>자동 삭제</dt><dd>${w.tier === "DEV" ? "7일 뒤 (연장 가능)" : "없음 · 관리자 승인 필요"}</dd>
-        <dt>올릴 파일</dt><dd>${esc(file.name)}</dd></dl>
+        ${isImage ? `<dt>앱 이미지</dt><dd class="mono small">${esc(image.image)}</dd><dt>그다음</dt><dd>원본은 그대로 두고 Lambda용 이미지를 따로 만들어 배포해요</dd>`
+          : `<dt>올릴 파일</dt><dd>${esc(file.name)}</dd>`}</dl>
         <p class="small muted" style="margin-top:14px">승인하면 실제 AWS 리소스가 만들어지고 비용이 발생합니다.${CFG.localMode ? " (로컬 모드에서는 만들지 않습니다)" : ""}</p>`,
     });
     if (!ok) return;
@@ -878,8 +905,9 @@ async function reviewPage() {
     btn.textContent = "만드는 중…";
     const err = document.getElementById("err");
     try {
-      const created = await api("POST", "/environments", { name: w.name.trim(), ...requirementsBody(w), budget_override: overridden });
-      await uploadZip(created.upload, file);
+      const created = await api("POST", "/environments", { name: w.name.trim(), ...requirementsBody(w), budget_override: overridden,
+        ...(isImage ? { image } : {}) });
+      if (!isImage) await uploadZip(created.upload, file);
       try { await api("POST", `/environments/${created.environment.env_id}/approve`); }
       catch (e) {
         const detail = failedTitles(e.data?.artifact) || e.data?.blocked?.map((b) => b.message).join(" ") || "";
@@ -893,18 +921,63 @@ async function reviewPage() {
       await refreshEnvs();
       location.hash = `#/env/${created.environment.env_id}`;
     } catch (e) {
-      document.getElementById("err").textContent = e.message;
+      const detail = (e.data?.artifact?.checks || []).filter((c) => c.status === "FAIL").map((c) => `${S.checkTitles[c.check_id] || c.check_id}: ${c.detail}`).join(" · ");
+      document.getElementById("err").textContent = `${e.message} ${detail}`.trim();
       btn.disabled = false;
       btn.textContent = "다시 시도";
     }
   };
 }
 
+// Serverless input (D-166): a public HTTP container image; the platform builds the Lambda image from it.
+function artifactKind(rec) {
+  if (!rec?.provisionable) return null;
+  return rec.artifact_kind || (rec.architecture?.compute === "NONE" ? "STATIC_ZIP" : null);
+}
+
+// Container runs all the time behind a shared internal ALB: say what that costs before approval (§9.3 INFO_SHARED_MARGINAL_COST).
+function containerCostNote(rec) {
+  const items = rec.cost?.line_items_upper || [];
+  const alb = items.find((i) => i.resource === "alb");
+  const n = (rec.reasons || []).find((r) => r.code === "INFO_SHARED_MARGINAL_COST")?.params?.n || 4;
+  const tasks = items.find((i) => i.resource === "fargate-min-tasks");
+  return `<div class="notice warn small">컨테이너는 요청이 없어도 항상 실행돼서 고정비가 있어요${tasks ? ` (컨테이너 월 약 $${Math.round(tasks.cents / 100)})` : ""}.
+    공유 부하분산기(내부 ALB)는 컨테이너 환경들이 나눠 쓰는 것으로 계산했어요${alb ? `. 지금 컨테이너 환경이 하나도 없다면 실제로는 월 약 $${Math.round((alb.cents * n) / 100)}이 더 들고, 마지막 컨테이너 환경을 지우면 함께 삭제돼요` : ""}.
+    처음 만들 때는 공유 인프라 준비로 20분 정도 걸릴 수 있어요.</div>`;
+}
+
+function imageForm(rec) {
+  const container = rec?.blueprint === "container";
+  return h`<h2>앱 컨테이너 이미지</h2>
+    <p class="muted small">공개 저장소(docker.io, public.ecr.aws, ghcr.io, quay.io)에 있는 HTTP 서버 이미지를 적어 주세요. 앱은 <span class="mono">PORT</span> 환경변수(8080)로 요청을 받아야 해요.
+      ${container ? "플랫폼이 원본 이미지를 그대로 환경 전용 저장소로 복사해 ECS Fargate에서 실행해요."
+        : "플랫폼이 원본은 그대로 두고, Lambda에서 실행할 수 있게 Lambda Web Adapter를 얹은 이미지를 따로 만들어요."}</p>
+    ${container ? containerCostNote(rec) : ""}
+    <div class="field"><label for="image">이미지 주소 (태그 또는 digest 포함)</label>
+      <input class="input mono" id="image" placeholder="예: docker.io/traefik/whoami:v1.10.3" autocomplete="off" spellcheck="false"></div>
+    <div class="field"><label for="health">상태 확인 경로</label>
+      <input class="input mono" id="health" value="/" spellcheck="false"><span class="help">이 경로가 200으로 응답하면 앱이 준비된 것으로 봐요.</span></div>
+    <div class="field"><label for="envvars">환경변수 (한 줄에 하나, KEY=VALUE)</label>
+      <textarea class="input mono" id="envvars" rows="3" placeholder="WHOAMI_PORT_NUMBER=8080" spellcheck="false"></textarea>
+      <span class="help">비밀번호·토큰 같은 비밀값은 넣지 마세요. 아직 비밀값 보관(Secrets Manager)을 지원하지 않아서, 비밀값으로 보이면 만들기 전에 막아요.</span></div>`;
+}
+
+function readImageForm() {
+  const env = {};
+  const lines = document.getElementById("envvars").value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  for (const line of lines) {
+    const i = line.indexOf("=");
+    if (i < 1) return { error: `환경변수는 KEY=VALUE 형식이어야 해요: ${line}` };
+    env[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+  }
+  return { image: { image: document.getElementById("image").value.trim(), health_path: document.getElementById("health").value.trim() || "/", env } };
+}
+
 function progressSteps(env) {
   const redeploy = (env.revisions || []).length > 1 || env.status === "REDEPLOYING";
   const labels = redeploy ? ["새 버전 업로드", "파일 교체 · 캐시 비우기", "보안·동작 검증", "결과"] : ["승인", "AWS 리소스 생성", "보안·동작 검증", "결과"];
   const st = env.status;
-  const stage = st === "PENDING_ADMIN_APPROVAL" || st === "DRAFT" ? 0 : st === "PROVISIONING" || st === "REDEPLOYING" ? 1 : st === "VALIDATING" ? 2 : 3;
+  const stage = st === "PENDING_ADMIN_APPROVAL" || st === "DRAFT" ? 0 : ["PROVISIONING", "REDEPLOYING", "REPAIRING"].includes(st) ? 1 : st === "VALIDATING" ? 2 : 3;
   const failedAt = st === "FAILED" ? (env.failure?.stage === "VALIDATE" || env.verdict ? 2 : 1) : -1;
   return `<div class="steps" aria-label="진행 단계">${labels.map((l, i) => {
     let cls = i < stage ? "done" : i === stage ? "now" : "";
@@ -922,7 +995,7 @@ function resultBlock(env) {
     READY: ["ok", "✓", "환경이 준비됐어요", "모든 보안·동작 검증을 통과했습니다."],
     DEGRADED: ["warn", "!", "접속에 문제가 있어요", "보안 기준은 통과했지만 사이트가 정상 응답하지 않습니다. 업로드한 파일을 확인해 주세요."],
     FAILED: ["bad", "×", env.failure?.stage === "PLAN" ? "보안 기준 위반으로 생성을 막았어요" : env.current_revision || env.failure?.stage === "REDEPLOY" ? "새 버전을 배포하지 못했어요" : "환경을 만들지 못했어요",
-      env.verdict?.security_failed ? "보안 검증에 실패해 접속을 차단했습니다." : (env.failure?.cause ? "아래 기록을 확인해 주세요." : "")],
+      env.verdict?.security_failed ? "보안 검증에 실패해 접속을 차단했습니다." : (env.failure?.message || env.failure?.cause ? "아래 기록을 확인해 주세요." : "")],
     PROVISIONING: ["run", "⋯", "AWS에 리소스를 만들고 있어요", "보통 5분 안팎 걸립니다. 이 화면을 닫아도 계속 진행돼요."],
     VALIDATING: ["run", "⋯", "보안과 동작을 검증하고 있어요", "실제 주소로 접속해 보고, 설정을 하나씩 확인합니다."],
     DELETING: ["run", "⋯", "삭제하고 있어요", "CDN 정리에 몇 분 걸릴 수 있어요."],
@@ -931,6 +1004,10 @@ function resultBlock(env) {
     DELETE_FAILED: ["bad", "×", "삭제에 실패했어요", "플랫폼이 자동으로 다시 시도합니다."],
     PENDING_ADMIN_APPROVAL: ["warn", "…", "관리자 승인을 기다리고 있어요", "운영 환경은 관리자가 승인하면 만들어집니다."],
     DRAFT: ["warn", "…", "아직 승인되지 않았어요", ""],
+    DRIFTED: ["warn", "!", "승인된 구성과 설정이 달라졌어요", env.drift?.endpoint_disabled
+      ? "보안 기준을 벗어난 변경이라 접속을 차단해 두었어요. 수정안을 확인하고 복구를 승인해 주세요."
+      : "아래 수정안을 확인하고, 맞으면 원래 구성으로 복구를 승인해 주세요."],
+    REPAIRING: ["run", "⋯", "원래 구성으로 되돌리고 있어요", "승인한 수정안만 적용하고, 끝나면 다시 검증해요."],
   }[st] || ["", "", st, ""];
   return h`<div class="card result ${map[0]}"><div class="icon">${map[1]}</div><h2>${esc(map[2])}</h2>
     <p class="muted">${esc(map[3])}</p>
@@ -961,7 +1038,7 @@ function checksTable(env) {
     return `<tr><td data-th="결과"><span class="badge ${cls}">${label}</span></td><td data-th="항목">${esc(title(c))}${isReviewer() ? `<div class="code-tag" style="margin:0">${esc(c.check_id)}</div>` : ""}</td><td data-th="시점">${esc(LAYER_KO[c.layer] || c.layer)}</td><td data-th="상세" class="small muted">${esc(c.detail)}</td></tr>`;
   }).join("");
   const v = env.verdict;
-  return h`<div class="card"><h2>검증 결과 ${v ? badge(v.verdict) : ""}</h2>
+  return h`<div class="card"><h2>검증 결과 ${v ? badge(env.status === "DRIFTED" ? "DRIFTED" : v.verdict) : ""}</h2>
     <div class="chips">${chips}</div>
     ${skipped ? `<p class="notice small">로컬 모드라 AWS가 필요한 검사 ${skipped}개는 실행하지 않았어요. 실제 배포에서는 모두 실행됩니다.</p>` : ""}
     ${failed.length ? h`<h3 style="margin-top:16px">통과하지 못한 항목</h3><ul class="reasons">${failed.map((c) =>
@@ -1098,8 +1175,10 @@ async function envPage(id, { quiet = false } = {}) {
   if (st === "DRAFT") actions.push(`<button class="btn primary" data-act="approve">승인하고 만들기</button>`);
   if (st === "FAILED" && ((env.failure?.stage !== "PLAN" && !env.verdict?.security_failed) || env.failure?.stage === "REDEPLOY"))
     actions.push(`<button class="btn" data-act="retry">다시 시도</button>`);
-  if (env.tier === "DEV" && ["READY", "DEGRADED"].includes(st)) actions.push(`<button class="btn" data-act="extend">7일 연장</button>`);
-  if (["DRAFT", "PENDING_ADMIN_APPROVAL", "READY", "DEGRADED", "FAILED", "DELETE_FAILED"].includes(st)) actions.push(`<button class="btn danger" data-act="delete">삭제</button>`);
+  if (st === "DRIFTED") actions.push(`<button class="btn primary" data-act="repair" ${repairReady(env) ? "" : "disabled"}>원래 구성으로 복구</button>`);
+  if (["READY", "DEGRADED", "DRIFTED"].includes(st)) actions.push(`<button class="btn" data-act="recheck">다시 검사</button>`);
+  if (env.tier === "DEV" && ["READY", "DEGRADED", "DRIFTED"].includes(st)) actions.push(`<button class="btn" data-act="extend">7일 연장</button>`);
+  if (["DRAFT", "PENDING_ADMIN_APPROVAL", "READY", "DEGRADED", "DRIFTED", "FAILED", "DELETE_FAILED"].includes(st)) actions.push(`<button class="btn danger" data-act="delete">삭제</button>`);
   const events = (env.event_log || []).slice().reverse().map((e) => `<li><span class="muted">${fmtTime(e.at)}</span><span>${e.status ? badge(e.status) + " " : ""}${esc(e.message)}</span></li>`).join("");
   $app.innerHTML = shell(h`<div class="page">
     <div style="display:flex;align-items:flex-start;gap:12px;justify-content:space-between;flex-wrap:wrap">
@@ -1114,17 +1193,20 @@ async function envPage(id, { quiet = false } = {}) {
         <dt>등급</dt><dd>${env.tier === "PROD" ? "실제 운영용" : "개발·테스트용"}</dd>
         <dt>최대 예상 비용</dt><dd>${usd(env.cost_upper_usd)}/월 <span class="muted small">(추정치)</span></dd>
         <dt>자동 삭제</dt><dd>${env.expires_at ? fmtTime(env.expires_at) : "없음"}</dd>
-        <dt>만든 사람</dt><dd>${esc(env.owner_email || "")}</dd>
+        <dt>만든 사람</dt><dd>${esc(env.owner_email || "")}${env.created_via === "agent" ? ` <span class="badge" data-agent>Claude Code agent</span>` : ""}</dd>
         <dt>승인</dt><dd>${esc(env.approved_by || "-")} ${env.approved_at ? "· " + fmtTime(env.approved_at) : ""}</dd>
+        ${env.artifact?.kind === "IMAGE" ? `<dt>앱 이미지</dt><dd class="mono small">${esc(env.artifact.image)}</dd>` : ""}
         <dt>현재 버전</dt><dd>${env.current_revision ? `rev-${esc(env.current_revision)}` : "-"}</dd>
         ${env.budget_override ? `<dt>예산 초과 승인</dt><dd data-override-detail>예산 월 ${usd(env.budget_override.budget_usd)} → 최대 월 ${usd(env.budget_override.cost_upper_usd)} · ${esc(env.budget_override.confirmed_by)} · ${fmtTime(env.budget_override.at)}</dd>` : ""}
       </dl></div>
       <div class="card"><h2>추천 이유</h2>${archDiagram(rec.architecture)}${reasonList((rec.reasons || []).slice(0, 6))}</div>
     </div>
-    ${env.failure ? `<div class="section card"><h2>실패 기록</h2><dl class="kv"><dt>단계</dt><dd>${esc(env.failure.stage)}</dd><dt>오류</dt><dd class="mono small">${esc(env.failure.error)}</dd><dt>상세</dt><dd class="mono small">${esc(env.failure.cause).slice(0, 1200)}</dd></dl></div>` : ""}
+    ${env.failure ? `<div class="section card"><h2>실패 기록</h2><dl class="kv"><dt>단계</dt><dd>${esc(env.failure.stage)}</dd>${env.failure.message ? `<dt>내용</dt><dd>${esc(env.failure.message)}</dd>` : ""}${env.failure.error ? `<dt>오류 (관리자)</dt><dd class="mono small">${esc(env.failure.error)}</dd>` : ""}${env.failure.cause ? `<dt>상세 (관리자)</dt><dd class="mono small">${esc(env.failure.cause).slice(0, 1200)}</dd>` : ""}</dl></div>` : ""}
+    ${st === "DRAFT" && env.created_via === "agent" ? `<p class="section notice warn" data-agent-draft>Claude Code agent가 저장소를 분석해 만든 초안이에요. 아직 아무것도 만들어지지 않았어요. 위 구성·비용·추천 이유를 확인하고, 맞으면 직접 <b>승인하고 만들기</b>를 눌러 주세요.</p>` : ""}
+    ${driftCard(env)}${lastRepairCard(env)}
     ${env.admission?.blocked?.length ? `<div class="section card"><h2>승인이 막힌 이유</h2>${reasonList(env.admission.blocked, "bad")}</div>` : ""}
     ${["DRAFT", "PENDING_ADMIN_APPROVAL"].includes(st) && env.artifact && !env.artifact.passed ? `<div class="section">${artifactHelp(env.artifact)}</div>` : ""}
-    ${st === "DRAFT" && rec.provisionable ? draftUpload(env) : ""}
+    ${st === "DRAFT" && artifactKind(rec) === "STATIC_ZIP" ? draftUpload(env) : ""}
     ${revisionCards(env)}
     <div class="section">${checksTable(env)}</div>
     ${reviewerPanel(rec, env) ? `<div class="section">${reviewerPanel(rec, env)}</div>` : ""}
@@ -1137,19 +1219,56 @@ async function envPage(id, { quiet = false } = {}) {
     const act = b.dataset.act;
     if (act === "delete" && !(await modal({ title: "이 환경을 삭제할까요?", confirm: "삭제", danger: true,
       body: `<p><b>${esc(env.name)}</b>의 사이트와 AWS 리소스를 모두 삭제합니다. 되돌릴 수 없어요.</p>` }))) return;
+    if (act === "repair" && !(await modal({ title: "원래 구성으로 되돌릴까요?", confirm: "복구",
+      body: `<p>승인된 구성과 달라진 리소스 ${env.repair_plan.changes}개를 아래처럼 되돌립니다. 콘솔에서 일부러 바꾼 설정이라면 함께 되돌아가요.</p>
+        <ul class="mono small">${repairResources(env).map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` }))) return;
     b.disabled = true;
     try {
       if (act === "delete") await api("DELETE", `/environments/${id}`);
       else await api("POST", `/environments/${id}/${act}`);
-      toast({ delete: "삭제를 시작했어요.", approve: "승인했어요.", retry: "다시 시도합니다.", extend: "7일 연장했어요." }[act]);
+      toast({ delete: "삭제를 시작했어요.", approve: "승인했어요.", retry: "다시 시도합니다.", extend: "7일 연장했어요.",
+        repair: "복구를 시작했어요.", recheck: "다시 검사하고 있어요. 잠시 뒤 결과가 보여요." }[act]);
     } catch (e) { toast(`${e.message} ${failedTitles(e.data?.artifact)}`.trim()); }
     await refreshEnvs();
     envPage(id, { quiet: true });
   }));
   clearTimeout(S.poll);
-  if (IN_PROGRESS.has(st) && location.hash === `#/env/${id}`) {
+  const waitingPlan = st === "DRIFTED" && !repairReady(env) && !env.repair_plan?.error;  // the plan arrives in a minute
+  if ((IN_PROGRESS.has(st) || waitingPlan) && location.hash === `#/env/${id}`) {
     S.poll = setTimeout(async () => { await refreshEnvs(); if (location.hash === `#/env/${id}`) envPage(id, { quiet: true }); }, CFG.localMode ? 1500 : 5000);
   }
+}
+
+// ------------------------------------------------------------------ Day-2 drift (D-186)
+const repairReady = (env) => !!(env.repair_plan?.stacks?.length && env.repair_plan.passed && env.repair_plan.changes);
+const repairResources = (env) => (env.repair_plan?.stacks || []).flatMap((s) => (s.changes || []).map((c) => `${c.address} (${c.actions.join("/")})`));
+const seconds = (n) => (n == null ? "-" : n < 120 ? `${n}초` : `${Math.round(n / 60)}분`);
+
+function driftCard(env) {
+  const d = env.drift;
+  if (!d || env.status !== "DRIFTED") return "";
+  const plan = env.repair_plan;
+  const rows = (d.failed || []).map((f) => `<li><b>${esc(S.checkTitles[f.check_id] || f.check_id)}</b>${codeTag(f.check_id)}<span class="muted small"> — ${esc(f.detail || "")}</span></li>`).join("");
+  const planBody = repairReady(env)
+    ? `<p>리소스 ${plan.changes}개를 승인된 구성으로 되돌립니다. 보안 검사(PLAN)를 통과한 수정안이에요.</p><ul class="mono small">${repairResources(env).map((r) => `<li>${esc(r)}</li>`).join("")}</ul>${plan.replaces?.length ? `<p class="notice warn small">다시 만들어지는 리소스가 있어요: ${esc(plan.replaces.join(", "))}</p>` : ""}`
+    : plan?.error ? `<p class="notice bad small">${esc(plan.error)}</p>`
+    : plan && !plan.changes ? `<p class="notice warn small">Terraform으로 되돌릴 차이가 없어요. Terraform이 관리하지 않는 부분이 바뀌었을 수 있어 관리자 확인이 필요해요.</p>`
+    : plan && !plan.passed ? `<p class="notice bad small">수정안이 보안 검사를 통과하지 못했어요: ${esc((plan.stacks || []).flatMap((s) => s.failed_checks || []).join(", "))}</p>`
+    : `<p class="muted">원래 구성으로 되돌리는 수정안을 만들고 있어요. 보통 1~2분 걸립니다.</p>`;
+  return h`<div class="section grid2" data-drift>
+    <div class="card"><h2>무엇이 달라졌나요</h2><ul class="reasons">${rows}</ul>
+      <dl class="kv"><dt>감지 방법</dt><dd>${esc({ EVENT: "변경 이벤트(CloudTrail)", SCHEDULE: "주기 검사", MANUAL: "다시 검사" }[d.trigger] || d.trigger)}</dd>
+        ${d.event_name ? `<dt>변경</dt><dd class="mono small">${esc(d.event_name)}</dd>` : ""}
+        ${d.actor ? `<dt>바꾼 사람</dt><dd class="mono small">${esc(d.actor)}</dd>` : ""}
+        <dt>바뀐 시각</dt><dd>${fmtTime(d.event_time || d.detected_at)}</dd>
+        <dt>감지까지</dt><dd>${seconds(d.detect_seconds)}</dd></dl></div>
+    <div class="card" data-repair-plan><h2>수정안</h2>${planBody}</div></div>`;
+}
+
+function lastRepairCard(env) {
+  const r = env.last_repair;
+  if (!r || !["READY", "DEGRADED"].includes(env.status)) return "";
+  return h`<p class="section notice small" data-last-repair>마지막 복구: ${fmtTime(r.repaired_at)} · 감지까지 ${seconds(r.detect_seconds)} · 승인 대기 ${seconds(r.wait_seconds)} · 승인 후 복구 완료까지 ${seconds(r.apply_seconds)} · 승인 ${esc(r.approved_by || "-")}</p>`;
 }
 
 // ------------------------------------------------------------------ router
@@ -1164,7 +1283,7 @@ async function render() {
   if (!CFG.apiUrl) { $app.innerHTML = `<div class="page"><div class="notice bad">config.js가 없습니다. 플랫폼을 배포한 뒤 접속해 주세요.</div></div>`; return; }
   if (route === "#/login" || !auth.tokens) return loginPage();
   if (route === "#/new") return startPage();
-  if (route === "#/new/custom") return presetPage();
+  if (route === "#/new/custom") { S.wizard = blankWizard(); location.replace("#/new/q"); return; }
   if (route === "#/new/quick") return templatePage();
   if (route === "#/new/quick/form") return quickFormPage();
   if (route === "#/new/q") return questionPage();
@@ -1183,7 +1302,6 @@ async function boot() {
   try {
     const [me, cat] = await Promise.all([api("GET", "/me"), api("GET", "/presets")]);
     S.me = me;
-    S.presets = cat.presets;
     S.templates = cat.templates || [];
     S.baseline = cat.baseline;
     S.checkTitles = cat.check_titles || {};

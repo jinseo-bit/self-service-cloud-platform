@@ -11,7 +11,9 @@ import boto3
 from boto3.dynamodb.conditions import Attr, Key
 
 JSON_FIELDS = ("input", "recommendation", "outputs", "checks", "verdict", "artifact", "failure", "admission", "revisions",
-               "budget_override", "origin")
+               "budget_override", "origin",
+               # Day-2 (D-186): nested records with numbers; as DynamoDB maps their ints would come back as Decimal
+               "drift", "repair_plan", "last_repair", "last_recheck", "drift_history")
 
 
 def now() -> str:
