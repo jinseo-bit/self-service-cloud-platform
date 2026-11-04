@@ -1,0 +1,408 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>[제안서] 요구사항 기반 Self-Service Cloud Platform</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Noto+Serif+KR:wght@500&display=block" rel="stylesheet">
+<style>
+@page { size: A4; margin: 22mm 21mm 20mm 21mm; }
+:root { --ink:#1f1f1f; --muted:#6b6b6b; --line:#e4e1db; --head:#f4f2ee; --chip:#efefef; --code:#f3f3f1; }
+* { box-sizing: border-box; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body { font-family: 'Noto Sans KR', 'Malgun Gothic', sans-serif; color: var(--ink); font-size: 10.3pt; line-height: 1.62;
+       margin: 0; word-break: keep-all; overflow-wrap: break-word; }
+h1 { font-family: 'Noto Serif KR', 'Batang', serif; font-weight: 500; font-size: 25pt; line-height: 1.25; margin: 0 0 10px; letter-spacing: -0.3px; }
+h2 { font-family: 'Noto Serif KR', 'Batang', serif; font-weight: 500; font-size: 17pt; margin: 26px 0 10px; break-after: avoid; }
+h3 { font-size: 11pt; margin: 18px 0 6px; break-after: avoid; }
+p { margin: 0 0 9px; }
+.meta { margin: 0 0 16px; }
+.chip { display: inline-block; background: var(--chip); border-radius: 6px; padding: 1px 9px; font-size: 9.5pt; color: #333; }
+.meta .dot { color: var(--muted); margin: 0 4px; }
+p > strong:only-child { display: block; margin-top: 12px; break-after: avoid; }
+table { border-collapse: collapse; width: 100%; margin: 6px 0 14px; font-size: 9.4pt; line-height: 1.5; }
+thead { display: table-header-group; }
+tr { break-inside: avoid; }
+th { background: var(--head); font-weight: 500; text-align: left; color: #444; }
+th, td { border: 1px solid var(--line); padding: 7px 9px; vertical-align: top; }
+th:first-child, td:first-child { min-width: 6.2em; }
+code { word-break: break-all; }
+ul { margin: 2px 0 10px; padding-left: 20px; }
+li { margin: 2px 0; }
+code { font-family: 'D2Coding', Consolas, monospace; font-size: 8.8pt; background: var(--code); border-radius: 4px; padding: 0 4px; }
+.diagram { margin: 4px 0 4px; text-align: center; break-inside: avoid; }
+.diagram svg { max-width: 100%; max-height: 41mm; height: auto; }
+.diagram pre.mermaid { margin: 0; }
+.diagram .cluster rect { fill: #fafaf8 !important; stroke: #e4e1db !important; }
+.note { color: #333; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script></head>
+<body><h1>[제안서] 요구사항 기반 Self-Service Cloud Platform</h1><p class='meta'><span class='chip'>2026-10-09</span><span class='dot'>·</span><span class='chip'>이진서</span></p><p>CFP 4장 요건에 맞춘 제안서입니다. 트랙 D의 예시 주제 "10분 안에 production-ready 환경"을 출발점으로 삼았습니다. 수치는 실제 AWS(ap-northeast-2, 계정 1개)에서 측정한 값이며, 측정 전인 값은 "목표" 또는 "예상"으로 표시했습니다.</p>
+<h2>1. 제목 / 트랙</h2>
+<table>
+<thead>
+<tr>
+<th>항목</th>
+<th>내용</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>제목</td>
+<td>앱 요구사항에 답하면 AWS 환경을 추천·생성·검증·회수하는 Self-Service Cloud Platform</td>
+</tr>
+<tr>
+<td>트랙</td>
+<td>D. Platform Engineering (실행 경로에 AI Agent 없음, 입력 보조 agent는 선택)</td>
+</tr>
+<tr>
+<td>Project Lead</td>
+<td>이진서</td>
+</tr>
+<tr>
+<td>Reviewer</td>
+<td>선수 2번, 3번</td>
+</tr>
+</tbody>
+</table>
+<h2>2. 문제 정의</h2>
+<p>AWS에 앱 하나를 올리려면 개발자가 compute 방식, 네트워크, IAM, 로그, 보안 헤더, 비용 구조를 모두 직접 정해야 합니다. 같은 "웹 서비스"라도 정적 사이트는 S3+CloudFront, 짧고 불규칙한 API는 Lambda, 연결을 오래 유지하는 서버는 Container가 맞는데, 이 판단을 사람마다 따로 하면 환경마다 구조와 보안 수준이 달라지고 쓰지 않는 고정비나 과도한 권한이 남습니다. 더 큰 문제는 "만들었다"와 "안전하게 쓸 수 있다"가 다르다는 점입니다. 이 플랫폼을 만드는 동안에도 Terraform이 로컬에서 모두 통과한 뒤 실제 AWS에서만 드러나는 권한 누락과 한도 초과로 배포가 7번 멈췄고, <code>terraform apply</code>가 성공한 환경이 보안 기준을 지킨다는 보장도 없었습니다. 개발자가 AWS 서비스 대신 앱의 요구사항에 답하면 플랫폼이 구성을 고르고, 승인 후 만들고, 결과를 자동으로 검증하고, 다 쓰면 남김없이 회수하게 하는 것이 이 프로젝트가 풀려는 문제입니다. 개발·테스트 환경을 많이 운영하는 회사도 같은 문제를 겪습니다.</p>
+<h2>3. 목표와 최종 지표</h2>
+<p>요구사항에 답한 개발자가 AWS 서비스를 하나도 고르지 않고 검증된 환경을 10분 안에 받되, 만들어지는 모든 환경이 같은 보안·비용 기준을 자동으로 만족하고, 삭제 후에는 아무것도 남지 않게 하는 것이 목표입니다.</p>
+<p><strong>정량 지표</strong></p>
+<table>
+<thead>
+<tr>
+<th>지표</th>
+<th>현재</th>
+<th>목표</th>
+<th>측정 방법</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>승인 → READY 시간 (DEV)</td>
+<td>Static 3분 58초, Serverless 1분 43초 (실측). Container는 공유 인프라 최초 생성 포함 약 18분, 이후 환경 약 5분 (예상)</td>
+<td>모든 Blueprint 10분 이내. Container의 공유 인프라 최초 생성만 20분 이내</td>
+<td>환경 기록의 승인 시각과 READY 판정 시각 차이. Blueprint별 3회 측정</td>
+</tr>
+<tr>
+<td>보안 기준 위반 차단</td>
+<td>READY 환경 FAIL 0 (Static, Serverless 실측). 검사마다 로컬 위반 주입 테스트 있음</td>
+<td>READY 환경 FAIL 0, 실제 AWS 위반 주입 10종 100% 차단</td>
+<td>PLAN·STATE·HTTP 검사 결과와 Negative E2E (일부러 잘못된 설정을 넣고 READY가 나오지 않는지 확인)</td>
+</tr>
+<tr>
+<td>삭제 후 남는 리소스</td>
+<td>3개 Blueprint 모두 0 (실측, Container는 공유 인프라 21개까지 함께 삭제)</td>
+<td>0</td>
+<td>삭제 후 read-only 조회 (Terraform state, IAM role, ECR, log group, VPC origin, CloudTrail 생성 이벤트)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>정성 지표</strong></p>
+<ul>
+<li>다른 선수 2명이 직접 환경을 만들어 보고 남긴 피드백: 질문이 이해하기 쉬운지, 실패했을 때 메시지만 보고 다음 행동을 정할 수 있는지</li>
+<li>실제 AWS에서 겪은 장애마다 원인·수정·재발 방지 테스트가 남은 postmortem과 ADR</li>
+</ul>
+<p><strong>Scope</strong></p>
+<ul>
+<li><strong>Must</strong>: 요구사항 질문과 결정적(deterministic) 추천 엔진, DB 없는 Static·Serverless·Container DEV 환경의 생성·검증·삭제, 승인 전 비용 표시와 예산 상한, PLAN·STATE·HTTP 검증, 실패 원인 표시, Static 재배포·롤백</li>
+<li><strong>Nice-to-have</strong>: Serverless + DynamoDB, Serverless 재배포·롤백, Container autoscaling, PROD 환경 E2E, 자연어 입력 보조 agent</li>
+<li><strong>Out of scope</strong>: EKS, RDS, multi-region, blue/green 배포, custom domain, 여러 AWS 계정</li>
+</ul>
+<h2>4. 접근 방법</h2>
+<p>개발자는 AWS 서비스가 아니라 앱의 특징(트래픽, 가장 긴 요청 시간, 실시간 연결, 메모리 상태, 데이터, 멈춤 허용, 공개 범위)에 답합니다. 추천 엔진은 같은 입력에 항상 같은 결과를 내는 규칙 기반이고, 사람이 승인해야만 실제 AWS가 바뀝니다. READY는 <code>terraform apply</code> 성공이 아니라, 만들기 전 plan 검사, 만든 뒤 실제 설정 검사, 외부 접속 검사를 모두 통과했을 때만 줍니다.</p>
+<div class="diagram"><pre class="mermaid">flowchart TB
+  subgraph R1[&quot;요청과 승인&quot;]
+    direction LR
+    DEV[&quot;개발자&lt;br/&gt;요구사항 답변&quot;] --&gt; ENG[&quot;추천 엔진&lt;br/&gt;규칙 기반 + 비용 계산&quot;] --&gt; APR[&quot;사람 승인&lt;br/&gt;예산·quota 확인&quot;] --&gt; RUN[&quot;Terraform runner&lt;br/&gt;Step Functions · CodeBuild&quot;]
+  end
+  subgraph R2[&quot;검사와 판정&quot;]
+    direction LR
+    PLAN[&quot;PLAN 검사&lt;br/&gt;만들기 전&quot;] --&gt; AWS[&quot;Blueprint 생성&lt;br/&gt;Static · Serverless · Container&quot;] --&gt; STATE[&quot;STATE 검사&lt;br/&gt;실제 설정&quot;] --&gt; HTTP[&quot;HTTP 검사&lt;br/&gt;외부 접속&quot;] --&gt; READY[&quot;READY&quot;]
+  end
+  R1 --&gt; R2
+</pre></div>
+<p>세 검사 중 하나라도 기준을 어기면 READY가 되지 않고 FAILED와 실패 단계·원인이 기록됩니다. 보안 위반이면 접속도 바로 차단됩니다.</p>
+<table>
+<thead>
+<tr>
+<th>Blueprint</th>
+<th>구조</th>
+<th>이렇게 정한 이유</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Static</td>
+<td>비공개 S3 + CloudFront(OAC)</td>
+<td>고정비 0, S3 직접 접근 차단</td>
+</tr>
+<tr>
+<td>Serverless</td>
+<td>사용자 container image + Lambda Web Adapter → Lambda → HTTP API</td>
+<td>요청이 없으면 비용 0. 원본 image는 그대로 두고 adapter를 얹은 image를 플랫폼이 따로 만듦</td>
+</tr>
+<tr>
+<td>Container</td>
+<td>CloudFront → VPC origin → 공유 내부 ALB → Fargate(공인 IP, NAT 없음)</td>
+<td>실시간 연결·긴 요청·메모리 상태가 필요한 앱용. ALB는 인터넷에 노출하지 않고 NAT Gateway 고정비를 피함</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>결정</th>
+<th>선택</th>
+<th>이유</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>추천 방식</td>
+<td>규칙 기반 엔진 (LLM 사용 안 함)</td>
+<td>같은 입력에 같은 결과, 추천 이유를 코드로 설명할 수 있음</td>
+</tr>
+<tr>
+<td>실행</td>
+<td>Step Functions + CodeBuild에서 Terraform, 환경별 state</td>
+<td>고정비 0, 실행 이력이 남고 실패 단계가 분명함</td>
+</tr>
+<tr>
+<td>권한</td>
+<td>runner와 환경 role 모두 permissions boundary, <code>sscp-env-*</code> 이름으로 범위 제한</td>
+<td>플랫폼이 강한 권한을 가져도 다른 리소스나 플랫폼 자신을 건드리지 못하게</td>
+</tr>
+<tr>
+<td>공유 인프라</td>
+<td>첫 Container 환경이 만들고 마지막 환경이 삭제</td>
+<td>Container 환경이 없을 때 ALB 고정비 0</td>
+</tr>
+<tr>
+<td>보안 위반 시</td>
+<td>판정 즉시 접속 차단(CloudFront 비활성, Lambda 동시성 0)</td>
+<td>위반한 환경이 잠깐이라도 열려 있지 않게</td>
+</tr>
+</tbody>
+</table>
+<p><strong>AI Agent 활용과 사전 학습 적용 계획</strong> (필수 강좌 4개는 제안서 제출 전에 수강하고, 아래처럼 적용합니다)</p>
+<ul>
+<li><strong>역할</strong>: 실행 경로에는 agent를 넣지 않습니다. 선택 기능인 입력 보조 agent는 "채팅 서버인데 사용자가 100명쯤"처럼 자연어로 쓴 설명을 질문 답변 초안으로 바꾸기만 하고, 사람이 확인한 답만 추천 엔진에 들어갑니다. 생성·삭제 권한은 없습니다.</li>
+<li><strong>AI Capabilities and Limitations</strong>: LLM은 같은 질문에도 답이 달라질 수 있다는 전제로, 추천과 승인 판단은 규칙 기반 로직이 하고 agent는 입력 초안만 맡습니다. 강좌에서 정리한 "agent가 틀리는 지점"을 입력 보조 agent의 평가 항목으로 씁니다.</li>
+<li><strong>Claude Code 101</strong>: repository에 project context 파일을 두고, AI coding tool에는 AWS read-only 조회만 맡깁니다. <code>terraform apply</code>와 삭제는 사람이 plan을 확인한 뒤 실행합니다.</li>
+<li><strong>Building Effective Human-Agent Teams</strong>: "AI가 plan을 검토하고 사람이 승인한다"는 역할 분담으로 운영합니다. AI가 놓친 권한 누락을 사람이 실행 결과로 발견한 사례를 postmortem에 남깁니다.</li>
+<li><strong>Introduction to MCP</strong>: Linear MCP를 연결해 실제 AWS에서 발견한 문제를 Issue로 만들고 engineering log와 연결합니다.</li>
+<li><strong>비교 방법</strong>: 다른 선수 2명이 agent가 있을 때와 없을 때 요구사항 입력을 마치는 시간과 잘못 고른 답의 수를 비교합니다.</li>
+</ul>
+<h2>5. 예상 비용</h2>
+<p>플랫폼 자체는 사용량 과금 서비스로만 만들어 고정비가 거의 없습니다. 환경 비용은 플랫폼의 단가표(2026-10-04 기준 근사값)로 계산했고, 제출 전 AWS Pricing Calculator로 다시 확인합니다.</p>
+<table>
+<thead>
+<tr>
+<th>항목</th>
+<th>월 예상 비용 (USD)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Control Plane (Cognito, API Gateway, Lambda, DynamoDB, Step Functions, S3, CloudFront, CloudTrail 1개)</td>
+<td>약 1–2</td>
+</tr>
+<tr>
+<td>CodeBuild runner (환경 생성·삭제할 때만 분 단위 과금)</td>
+<td>1 미만</td>
+</tr>
+<tr>
+<td>Static DEV 환경 1개</td>
+<td>1 미만</td>
+</tr>
+<tr>
+<td>Serverless DEV 환경 1개</td>
+<td>1 미만</td>
+</tr>
+<tr>
+<td>Container DEV 환경 1개 (Fargate Spot 1개 + 공유 ALB를 4개 환경이 나눔)</td>
+<td>최대 12, 혼자 쓰면 약 23.5</td>
+</tr>
+<tr>
+<td>실제 AWS E2E 테스트</td>
+<td>별도 예산 10</td>
+</tr>
+<tr>
+<td>합계 (테스트 제외, Container 1개 운영 기준)</td>
+<td>약 15–27</td>
+</tr>
+</tbody>
+</table>
+<p><strong>비용 안전장치</strong></p>
+<ul>
+<li>AWS Budgets 월 $30: 실제 비용 80%, 예측 비용 100%에서 메일 알림</li>
+<li>플랫폼 전체 상한 $30: 새 환경의 최대 비용을 더하면 넘을 때 승인 단계에서 차단 (사용자가 우회할 수 없음)</li>
+<li>사용자당 환경 수 제한 DEV 2개·PROD 1개, DEV 환경은 7일 뒤 자동 삭제</li>
+<li>NAT Gateway, 고정 IP(EIP), EC2 instance는 만들기 전 검사에서 차단</li>
+<li>입력 보조 agent를 붙이면 CFP 8장의 네 가지 Bedrock 한도(저가 모델만 허용, 프로젝트 tag inference profile, 일일 token 알람, Budgets action)를 먼저 설정</li>
+</ul>
+<h2>6. 예상 리스크</h2>
+<p>가장 큰 리스크는 로컬 테스트를 다 통과해도 실제 AWS에서만 드러나는 문제입니다. 구현 중 이미 7번 겪었기 때문에, 새 Blueprint는 DEV 환경 하나로 실제 AWS에서 생성부터 삭제까지 확인한 뒤에만 완료로 봅니다.</p>
+<table>
+<thead>
+<tr>
+<th>리스크</th>
+<th>영향</th>
+<th>대응</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>실제 AWS에서만 드러나는 IAM 누락·한도 (실제: <code>apigateway:TagResource</code>, log delivery 권한, <code>ecs:ListServiceDeployments</code>, <code>ecs:ListTasks</code>, inline 정책 10,240자 한도, Linux용 provider checksum)</td>
+<td>생성·검증 실패</td>
+<td>실패마다 회귀 테스트로 고정. 검증 코드의 AWS 호출마다 필요한 권한을 공식 레퍼런스 기준 "권한 지도"로 테스트</td>
+</tr>
+<tr>
+<td>검증기 오탐 (실제: 공유 route table을 위반으로 판정해 정상 환경을 차단)</td>
+<td>정상 환경이 차단됨</td>
+<td>테스트용 가짜 응답을 실제 AWS 응답 형태로 맞추고, E2E 응답을 테스트 데이터로 보관</td>
+</tr>
+<tr>
+<td>Container 고정비 (ALB, 항상 실행되는 task)</td>
+<td>방치하면 비용 누적</td>
+<td>공유 ALB는 마지막 환경과 함께 삭제, 예산 상한, DEV TTL 7일</td>
+</tr>
+<tr>
+<td>공유 인프라 생성·삭제가 오래 걸림 (VPC origin 생성 9분, 삭제 7분)</td>
+<td>첫 Container 생성이 20분 가까이</td>
+<td>진행 단계 메시지 표시, CodeBuild 90분 timeout, 두 번째 환경부터 공유 인프라 재사용</td>
+</tr>
+<tr>
+<td>AI가 만든 코드·권한의 오류</td>
+<td>잘못된 설정 배포</td>
+<td>사람이 plan 확인 후 apply, 설명할 수 없는 코드는 merge하지 않음</td>
+</tr>
+</tbody>
+</table>
+<h2>7. 학습 계획</h2>
+<p>ECS Fargate와 CloudFront VPC origin, IAM 권한 레퍼런스는 이번에 처음 깊게 다루는 영역이라, Container 완료 전까지 아래 학습을 병행하고 engineering log에 <code>학습</code> tag로 남깁니다.</p>
+<table>
+<thead>
+<tr>
+<th>기술·서비스</th>
+<th>현재 수준</th>
+<th>필요한 이유</th>
+<th>공부 방법</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ECS Fargate, ALB, CloudFront VPC origin</td>
+<td>첫 E2E에서 생성까지 성공</td>
+<td>Container Blueprint 완성</td>
+<td>공식 문서, 실제 E2E 응답 분석, 두 번째 환경으로 공유 인프라 재사용 확인</td>
+</tr>
+<tr>
+<td>IAM Service Authorization Reference</td>
+<td>실패를 통해 읽기 시작</td>
+<td>action마다 필요한 resource type이 달라 누락이 반복됨</td>
+<td>검증 코드의 AWS 호출별 권한 지도 작성, IAM Access Analyzer policy 검증</td>
+</tr>
+<tr>
+<td>Terraform provider·state·lock</td>
+<td>실제 장애 경험 있음</td>
+<td>Windows 개발과 Linux CodeBuild 실행 환경 차이</td>
+<td>여러 플랫폼용 lock 파일, saved plan과 state serial 동작 실습</td>
+</tr>
+<tr>
+<td>AWS 비용 모델</td>
+<td>근사 단가표로 계산</td>
+<td>추천 순위와 예산 상한의 정확도</td>
+<td>Price List API로 단가 갱신, 실제 청구서와 비교</td>
+</tr>
+<tr>
+<td>Claude Academy 필수 강좌 4개</td>
+<td>제안서 제출 전 수강 예정</td>
+<td>CFP 필수, 4장의 agent 적용 계획 확정</td>
+<td>Claude Code 101, AI Capabilities and Limitations, Introduction to MCP, Building Effective Human-Agent Teams (약 7시간)</td>
+</tr>
+<tr>
+<td>Amazon Bedrock, MCP</td>
+<td>처음</td>
+<td>입력 보조 agent와 Linear 연결</td>
+<td>Claude with Amazon Bedrock 중 tool use 부분, MCP 강좌 실습 반복</td>
+</tr>
+</tbody>
+</table>
+<h2>AI 사용 내역</h2>
+<table>
+<thead>
+<tr>
+<th>항목</th>
+<th>AI를 쓴 방식</th>
+<th>받아들인 것 / 버린 것과 이유</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2. 문제 정의</td>
+<td>GPT와 1차 초안을 쓴 뒤, Claude에게 실측 기록을 기준으로 다시 검토를 받음</td>
+<td>"Terraform을 대신 실행해 주는 도구와 무엇이 다르냐"는 관점을 받아들여, apply가 성공한 뒤에도 실제 AWS에서만 드러난 실패 7건을 근거로 "만들었다 ≠ 안전하게 쓸 수 있다"를 문제의 중심에 둠. 확인되지 않은 수치는 버림</td>
+</tr>
+<tr>
+<td>4. 접근 방법</td>
+<td>공유 ALB와 환경별 ALB, NAT와 공인 IP 등 대안 비교를 받음</td>
+<td>비용 기준으로 공유 ALB + NAT 없는 구조를 선택. 결정은 대안을 질문으로 비교해 직접 확정</td>
+</tr>
+<tr>
+<td>IAM·Terraform</td>
+<td>AI가 정책과 Terraform 초안을 작성</td>
+<td>실제 AWS에서 6건이 누락돼 있었음. AI가 "불필요하다"며 지운 권한이 실제로 필요했던 사례가 있어, 권한을 줄일 때는 공식 레퍼런스 근거를 먼저 남기는 규칙을 만듦</td>
+</tr>
+<tr>
+<td>검증 코드</td>
+<td>AI가 검사 로직과 테스트를 작성</td>
+<td>가짜 응답이 실제 AWS 응답과 달라 오탐이 났음. 실제 응답 형태로 테스트를 고침</td>
+</tr>
+<tr>
+<td>5. 예상 비용</td>
+<td>비용 표 초안 작성</td>
+<td>항목 구성은 사용, 금액은 플랫폼 단가표와 Pricing Calculator로 직접 다시 계산</td>
+</tr>
+</tbody>
+</table>
+<h2>참고: 초기 Linear 구성</h2>
+<p>제안서 필수 항목은 아니지만, 3장의 성공 기준을 아래처럼 Milestone과 Issue로 옮겨 관리합니다.</p>
+<table>
+<thead>
+<tr>
+<th>Milestone</th>
+<th>대표 Issue</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1. Control Plane + Static</td>
+<td>요구사항 질문, 추천 엔진, 승인 흐름, Static E2E (생성 → 재배포 → 롤백 → 삭제)</td>
+</tr>
+<tr>
+<td>2. Serverless</td>
+<td>Lambda Web Adapter image 생성, HTTP API, Serverless E2E</td>
+</tr>
+<tr>
+<td>3. Container</td>
+<td>공유 인프라, ECS Fargate, Container E2E, 두 번째 환경 재사용 확인</td>
+</tr>
+<tr>
+<td>4. Hardening</td>
+<td>Negative E2E 10종, 검증기 오탐 방지, 로그 버킷 versioning</td>
+</tr>
+<tr>
+<td>5. 마무리</td>
+<td>postmortem, engineering log, 최종 보고서, 15분 발표, 3분 demo</td>
+</tr>
+</tbody>
+</table>
+<p>Issue는 team key를 붙여 <code>SSCP-12</code>처럼 번호가 매겨지고, 같은 ID를 branch 이름에 넣어 Pull Request와 연결합니다.</p><script>
+mermaid.initialize({ startOnLoad: false, theme: 'base', securityLevel: 'strict',
+  flowchart: { htmlLabels: true, curve: 'basis', nodeSpacing: 22, rankSpacing: 26, padding: 8, useMaxWidth: true },
+  themeVariables: { fontFamily: "'Noto Sans KR', 'Malgun Gothic', sans-serif", fontSize: '12px',
+    primaryColor: '#f3f3f1', primaryBorderColor: '#b9b6b0', primaryTextColor: '#1f1f1f', lineColor: '#8a8a8a',
+    edgeLabelBackground: '#ffffff' } });
+// measure labels with the web font, not the fallback, or node text gets clipped
+document.fonts.ready.then(() => mermaid.run({ querySelector: '.mermaid' })).then(() => { document.body.dataset.ready = '1'; });
+</script></body></html>

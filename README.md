@@ -20,7 +20,7 @@
 | [docs/security-baseline.md](docs/security-baseline.md) | 모든 환경에 강제되는 보안 기준 (SB-xx) |
 | [docs/production-ready.md](docs/production-ready.md) | production-ready 판정 기준 (PR-xx) |
 
-현재 생성할 수 있는 Blueprint는 **Static(S3 + CloudFront)** 하나입니다. 엔진은 Serverless와 Container까지 추천하지만, 해당 환경은 아직 만들 수 없다고 표시됩니다.
+현재 생성할 수 있는 Blueprint는 **Static(S3 + CloudFront)**, **Serverless(컨테이너 이미지 → Lambda + Lambda Web Adapter → HTTP API, DB 없음)**, **Container(컨테이너 이미지 → ECS Fargate ← 공유 internal ALB ← CloudFront VPC origin, DB 없음)**입니다. 엔진은 데이터 계층까지 추천하지만, 해당 환경은 아직 만들 수 없다고 표시됩니다.
 
 ## Architecture
 
@@ -30,7 +30,8 @@
 |---|---|
 | Control Plane | Implemented in Terraform · AWS Apply Pending |
 | Static Blueprint | Implemented in Code · AWS E2E Pending |
-| Serverless / Container Blueprint | Planned · 추천만 가능, Provisioning 미구현 |
+| Serverless Blueprint (DB 없음) | AWS E2E Complete (DEV) |
+| Container Blueprint (DB 없음) | Implemented in Code · AWS E2E Pending |
 
 ### Architecture Details
 
