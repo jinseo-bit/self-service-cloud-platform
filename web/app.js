@@ -349,7 +349,9 @@ function shell(content) {
 async function refreshEnvs() {
   try {
     const qs = S.me?.admin ? "?all=1" : "";
-    S.envs = (await api("GET", "/environments" + qs)).environments;
+    const r = await api("GET", "/environments" + qs);
+    S.envs = r.environments;
+    S.summary = r.summary || null;
   } catch (e) { /* shown by page */ }
 }
 
@@ -391,18 +393,57 @@ function loginPage(stage = {}) {
   };
 }
 
+// D-194 overview: the same list with health columns and totals. Admins see every environment, others their own.
+const ATTENTION = new Set(["FAILED", "DEGRADED", "DRIFTED", "DELETE_FAILED"]);
+const RUN_OF = { NONE: "정적 호스팅", SLS: "요청 단위 실행", SLS_PC: "요청 단위 실행", CTR: "상시 실행 컨테이너" };
+const runOf = (cid) => RUN_OF[(cid || "").split("+")[0]] || "-";
+function healthCell(e) {
+  if (["DRAFT", "PENDING_ADMIN_APPROVAL", "DELETED"].includes(e.status) || (IN_PROGRESS.has(e.status) && !e.checked_at)) return '<span class="muted">-</span>';
+  if (e.endpoint_disabled) return '<span class="chip bad" data-health="blocked">보안 위반 · 접속 차단</span>';
+  if (e.security_failed) return '<span class="chip bad" data-health="security">보안 기준 실패</span>';
+  if (e.status === "DRIFTED") return '<span class="chip warn" data-health="drift">설정 변경 감지</span>';
+  if (e.failed_count) return `<span class="chip warn" data-health="failed">검사 ${e.failed_count}개 실패</span>`;
+  return e.checked_at ? '<span class="chip ok" data-health="ok">기준 통과</span>' : '<span class="muted">-</span>';
+}
+function overviewTiles(s) {
+  if (!s) return "";
+  const cost = s.scope === "all" ? `$${s.committed_usd}<span class="t-unit"> / $${s.cap_usd}</span>` : `$${s.committed_usd}`;
+  return `<div class="tiles" data-overview>
+    <div class="tile"><div class="t-label">리소스 사용 중</div><div class="t-value">${s.active}<span class="t-unit"> / ${s.total}개</span></div></div>
+    <div class="tile ${s.attention ? "warn" : ""}"><div class="t-label">확인 필요</div><div class="t-value" data-attention>${s.attention}<span class="t-unit">개</span></div><div class="t-sub">실패·점검 필요·설정 변경</div></div>
+    <div class="tile ${s.security ? "bad" : ""}"><div class="t-label">보안 기준 실패</div><div class="t-value" data-security>${s.security}<span class="t-unit">개</span></div></div>
+    <div class="tile"><div class="t-label">월 최대 예상 비용</div><div class="t-value" data-cost>${cost}</div><div class="t-sub">${s.scope === "all" ? "플랫폼 전체 상한 대비" : "내 환경 합계"}</div></div>
+    <div class="tile ${s.expiring ? "warn" : ""}"><div class="t-label">2일 안에 자동 삭제</div><div class="t-value">${s.expiring}<span class="t-unit">개</span></div></div>
+  </div>`;
+}
 function homePage() {
-  const rows = S.envs.map((e) => h`
-    <tr><td><a href="#/env/${esc(e.env_id)}"><b>${esc(e.name)}</b></a><div class="muted small mono">${esc(e.env_id)}</div></td>
-      <td>${badge(e.status)}</td><td>${esc(e.tier)}</td><td>${usd(e.cost_upper_usd)}/월</td>
+  const only = S.attentionOnly;
+  const list = only ? S.envs.filter((e) => ATTENTION.has(e.status) || e.security_failed) : S.envs;
+  const admin = S.me?.admin;
+  const rows = list.map((e) => h`
+    <tr data-env="${esc(e.env_id)}"><td><a href="#/env/${esc(e.env_id)}"><b>${esc(e.name)}</b></a><div class="muted small mono">${esc(e.env_id)}</div></td>
+      <td>${badge(e.status)}</td><td class="small">${esc(runOf(e.candidate_id))}<div class="muted">${esc(e.tier)}</div></td>
+      <td>${healthCell(e)}</td><td class="small muted">${fmtTime(e.checked_at)}</td>
+      <td class="small">${e.tier === "DEV" && e.expires_at ? fmtTime(e.expires_at) : "-"}</td><td>${usd(e.cost_upper_usd)}/월</td>
       <td class="small">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.url.replace("https://", ""))}</a>` : "-"}</td>
-      ${S.me?.admin ? `<td class="small muted">${esc(e.owner_email || "")}</td>` : ""}</tr>`).join("");
-  return shell(h`<div class="page">
-    <h1>${S.me?.admin ? "전체 환경" : "내 환경"}</h1>
-    <p class="lead">요구사항만 입력하면 플랫폼이 구성을 고르고 실제 AWS 환경을 만들어 검증합니다.</p>
-    ${S.envs.length ? `<div class="card"><table><thead><tr><th>이름</th><th>상태</th><th>등급</th><th>최대 예상 비용</th><th>주소</th>${S.me?.admin ? "<th>소유자</th>" : ""}</tr></thead><tbody>${rows}</tbody></table></div>`
-      : `<div class="card result"><div class="icon">☁️</div><h2>첫 환경을 만들어 볼까요?</h2><p class="muted">몇 가지 질문에 답하면 바로 추천해 드려요.</p><a class="btn primary" href="#/new">새 환경 만들기</a></div>`}
+      ${admin ? `<td class="small muted">${esc(e.owner_email || "")}</td>` : ""}</tr>`).join("");
+  const head = `<tr><th>이름</th><th>상태</th><th>실행 방식</th><th>보안·검사</th><th>마지막 검사</th><th>자동 삭제</th><th>최대 예상 비용</th><th>주소</th>${admin ? "<th>소유자</th>" : ""}</tr>`;
+  const empty = `<tr><td colspan="${admin ? 9 : 8}" class="muted">확인이 필요한 환경이 없어요.</td></tr>`;
+  const body = S.envs.length
+    ? `${overviewTiles(S.summary)}
+      <div class="row-between"><h2 class="h3">환경 ${list.length}개</h2>
+        <label class="check-line small"><input type="checkbox" id="attention-only" ${only ? "checked" : ""}> 확인이 필요한 환경만</label></div>
+      <div class="card table-wrap"><table><thead>${head}</thead><tbody>${rows || empty}</tbody></table></div>`
+    : `<div class="card result"><div class="icon">☁️</div><h2>첫 환경을 만들어 볼까요?</h2><p class="muted">몇 가지 질문에 답하면 바로 추천해 드려요.</p><a class="btn primary" href="#/new">새 환경 만들기</a></div>`;
+  return shell(`<div class="page">
+    <h1>${admin ? "전체 환경" : "내 환경"}</h1>
+    <p class="lead">${admin ? "모든 사용자의 환경 상태·보안·비용을 한눈에 봅니다." : "내 환경의 상태·보안·비용을 한눈에 봅니다."}</p>
+    ${body}
   </div>`);
+}
+function bindHome() {
+  const c = document.getElementById("attention-only");
+  if (c) c.onchange = () => { S.attentionOnly = c.checked; $app.innerHTML = homePage(); bindShell(); bindHome(); };
 }
 
 function startPage() {
@@ -1295,6 +1336,7 @@ async function render() {
   if ((location.hash || "#/") !== route) return; // user navigated away while loading
   $app.innerHTML = homePage();
   bindShell();
+  bindHome();
 }
 
 async function boot() {

@@ -65,7 +65,8 @@ def _serverless_checks(env: dict, event: dict) -> tuple[list[CheckResult], list[
            "log_group": out["log_group"], "repository_name": out["repository_name"], "repository_url": out["repository_url"],
            "env_boundary_arn": ENV_BOUNDARY, "tier": env["tier"], "trail_name": TRAIL_NAME,
            "log_retention_days": 30 if env["tier"] == "PROD" else 7,
-           "alarm_names": out.get("alarm_names") or [], "alert_topic_arn": out.get("alert_topic_arn")}
+           "alarm_names": out.get("alarm_names") or [], "alert_topic_arn": out.get("alert_topic_arn"),
+           "image_scan": bool(event.get("image_scan"))}
     state = validate_serverless_state(lambda_=boto3.client("lambda", region_name=REGION), iam=boto3.client("iam"),
                                       logs=boto3.client("logs", region_name=REGION),
                                       apigw=boto3.client("apigatewayv2", region_name=REGION),
@@ -90,7 +91,8 @@ def _container_checks(env: dict, event: dict) -> tuple[list[CheckResult], list[C
     ctx |= {"alb_security_group_id": shared.get("alb_security_group_id", ""), "env_boundary_arn": ENV_BOUNDARY, "tier": env["tier"],
             "multi_az": arch.get("multi_az", "SINGLE"), "min_tasks": (arch.get("scaling") or {}).get("ctr_min_tasks", 1),
             "app_port": APP_PORT, "log_retention_days": 30 if env["tier"] == "PROD" else 7, "trail_name": TRAIL_NAME,
-            "ip_allowlist": allow, "alarm_names": out.get("alarm_names") or [], "alert_topic_arn": out.get("alert_topic_arn")}
+            "ip_allowlist": allow, "alarm_names": out.get("alarm_names") or [], "alert_topic_arn": out.get("alert_topic_arn"),
+            "image_scan": bool(event.get("image_scan"))}
     ecs, ec2 = boto3.client("ecs", region_name=REGION), boto3.client("ec2", region_name=REGION)
     state = validate_container_state(ecs=ecs, elbv2=boto3.client("elbv2", region_name=REGION), ec2=ec2, iam=boto3.client("iam"),
                                      logs=boto3.client("logs", region_name=REGION), ecr=boto3.client("ecr", region_name=REGION),
@@ -109,7 +111,8 @@ def _container_checks(env: dict, event: dict) -> tuple[list[CheckResult], list[C
 def validate(event):
     s = _store()
     env = s.get(event["env_id"])
-    return _finish_validation(s, env, *run_checks(env, event))
+    # D-192: the image scan is read here only (deploy, redeploy, repair), not on Day-2 rechecks
+    return _finish_validation(s, env, *run_checks(env, {**event, "image_scan": True}))
 
 
 def run_checks(env: dict, event: dict) -> tuple[list[CheckResult], list[CheckResult]]:

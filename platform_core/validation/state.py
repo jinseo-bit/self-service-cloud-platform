@@ -19,6 +19,41 @@ def _err(e: ClientError) -> str:
     return e.response.get("Error", {}).get("Code", "ClientError")
 
 
+def check_image_findings(ecr, *, repository_name: str, image_uri: str, attempts: int = 24, delay: float = 5.0,
+                         sleep=time.sleep) -> CheckResult:
+    """SB-PUB-07/findings (D-192): read the ECR scan of the exact image being deployed, once, at validation (not on
+    Day-2 rechecks). A CRITICAL finding fails the check (Security); other severities are recorded in the detail.
+    The scan starts on push, so a scan still running is waited for; a scan AWS cannot give is NOT_APPLICABLE."""
+    if "@sha256:" not in image_uri:
+        return _r("SB-PUB-07/findings", "Security", False, f"image is not pinned by digest: {image_uri}", "SB-PUB-07")
+    digest = image_uri.split("@", 1)[1]
+    for i in range(attempts):
+        try:
+            r = ecr.describe_image_scan_findings(repositoryName=repository_name, imageId={"imageDigest": digest}, maxResults=1)
+        except ClientError as e:
+            if _err(e) == "ScanNotFoundException" and i < attempts - 1:
+                sleep(delay)
+                continue
+            if _err(e) == "ScanNotFoundException":
+                return _r("SB-PUB-07/findings", "Security", True, "no scan for this image", "SB-PUB-07", status=NOT_APPLICABLE)
+            return _r("SB-PUB-07/findings", "Security", False, f"scan findings unreadable ({_err(e)})", "SB-PUB-07")
+        st = r.get("imageScanStatus") or {}
+        if st.get("status") in ("IN_PROGRESS", "PENDING"):
+            if i < attempts - 1:
+                sleep(delay)
+                continue
+            break
+        if st.get("status") in ("COMPLETE", "ACTIVE"):
+            counts = (r.get("imageScanFindings") or {}).get("findingSeverityCounts") or {}
+            crit = int(counts.get("CRITICAL", 0))
+            seen = ", ".join(f"{k.lower()}={counts[k]}" for k in ("CRITICAL", "HIGH", "MEDIUM", "LOW") if counts.get(k)) or "none"
+            return _r("SB-PUB-07/findings", "Security", crit == 0, f"image scan findings: {seen}", "SB-PUB-07")
+        return _r("SB-PUB-07/findings", "Security", True,
+                  f"scan status={st.get('status')} {st.get('description') or ''}".strip(), "SB-PUB-07", status=NOT_APPLICABLE)
+    return _r("SB-PUB-07/findings", "Security", True, f"scan still running after {int(attempts * delay)}s", "SB-PUB-07",
+              status=NOT_APPLICABLE)
+
+
 def wait_distribution_deployed(cloudfront, distribution_id: str, timeout_s: int = 900, interval_s: int = 15) -> str:
     deadline = time.monotonic() + timeout_s
     status = "Unknown"
@@ -180,6 +215,8 @@ def validate_serverless_state(*, lambda_, iam, logs, apigw, ecr, cloudtrail, ctx
     image = (fn.get("Code") or {}).get("ImageUri", "")
     out.append(_r("PR-L-02", "Security", image.startswith(ctx["repository_url"] + "@sha256:"),
                   f"image={image}", "SB-PUB-07"))
+    if ctx.get("image_scan"):  # D-192: once, at validation
+        out.append(check_image_findings(ecr, repository_name=ctx["repository_name"], image_uri=image))
     out.append(_r("PR-L-03", "Operability", 0 < cfg.get("Timeout", 0) < 30 and cfg.get("MemorySize", 0) >= 128,
                   f"timeout={cfg.get('Timeout')}s memory={cfg.get('MemorySize')}MB"))
 
@@ -321,6 +358,8 @@ def validate_container_state(*, ecs, elbv2, ec2, iam, logs, ecr, cloudfront, clo
     scanned = repo.get("imageScanningConfiguration", {}).get("scanOnPush") is True and repo.get("imageTagMutability") == "IMMUTABLE"
     out.append(_r("SB-PUB-07", "Security", scanned and pinned, f"scan on push + immutable={scanned}, task image pinned={pinned}",
                   "SB-PUB-07"))
+    if ctx.get("image_scan") and containers:  # D-192: once, at validation
+        out.append(check_image_findings(ecr, repository_name=ctx["repository_name"], image_uri=containers[0].get("image", "")))
     enc = (repo.get("encryptionConfiguration") or {}).get("encryptionType")
     out.append(_r("SB-ENC-05", "Security", enc in ("AES256", "KMS", "KMS_DSSE"),
                   f"ECR encryption={enc}, CloudWatch Logs encrypted by default", "SB-ENC-05"))

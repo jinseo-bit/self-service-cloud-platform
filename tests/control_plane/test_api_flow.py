@@ -458,3 +458,25 @@ def test_container_environment_is_created_like_serverless(api):
     code, r = call(api, "POST /environments/{env_id}/approve", env_id=env["env_id"])
     assert code == 202 and r["environment"]["status"] == "PROVISIONING"
     assert call(api, "POST /environments/{env_id}/redeploy", env_id=env["env_id"], body={})[0] == 409  # not in the MVP
+
+
+# ------------------------------------------------------------------ overview (D-194)
+
+def test_list_carries_health_and_a_summary_scoped_to_the_viewer(api):
+    ready = _ready_env(api)
+    api.store().update(ready, verdict={"verdict": "READY", "failed": [], "security_failed": False},
+                       last_recheck={"at": "2026-11-05T06:22:11Z", "trigger": "MANUAL", "failed": []})
+    drifted = create(api, name="d")["environment"]["env_id"]
+    api.store().update(drifted, status="DRIFTED", cost_upper_usd=3,
+                       drift={"detected_at": "2026-11-05T07:00:00Z", "security": True, "endpoint_disabled": True})
+    create(api, user="u2", name="other")
+    code, r = call(api, "GET /environments")
+    assert code == 200
+    rows = {e["env_id"]: e for e in r["environments"]}
+    assert rows[ready]["checked_at"] == "2026-11-05T06:22:11Z" and rows[ready]["security_failed"] is False
+    assert rows[drifted]["security_failed"] and rows[drifted]["endpoint_disabled"] and rows[drifted]["drift_since"]
+    s = r["summary"]
+    assert s["scope"] == "mine" and s["total"] == 2 and s["attention"] == 1 and s["security"] == 1
+    assert s["committed_usd"] >= 3, "a drifted environment still costs money (D-193)"
+    code, r = call(api, "GET /environments", user="admin", admin=True, qs={"all": "1"})
+    assert r["summary"]["scope"] == "all" and r["summary"]["total"] == 3 and r["summary"]["cap_usd"] == 30

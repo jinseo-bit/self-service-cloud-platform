@@ -8,7 +8,10 @@ from __future__ import annotations
 from . import constants as C
 from .reasons import R
 
-ACTIVE = {"PENDING_ADMIN_APPROVAL", "PROVISIONING", "VALIDATING", "READY", "DEGRADED", "FAILED", "DELETING", "DELETE_FAILED"}
+# Statuses whose environment holds (or is about to hold) AWS resources, so it counts toward the quota and the cap.
+# D-193: REDEPLOYING (D-150) and DRIFTED/REPAIRING (D-186) were missing, so a drifted environment cost $0 here.
+ACTIVE = {"PENDING_ADMIN_APPROVAL", "PROVISIONING", "VALIDATING", "READY", "DEGRADED", "FAILED", "DELETING", "DELETE_FAILED",
+          "REDEPLOYING", "DRIFTED", "REPAIRING"}
 
 
 def admit(recommendation: dict, *, owner_envs: list[dict], all_envs: list[dict], env_id: str,

@@ -70,7 +70,7 @@ AWS managed key를 허용하는 근거: 기준은 "저장 시 암호화 여부"�
 | SB-PUB-04 | ALB SG inbound는 CloudFront VPC origin 서비스 SG(또는 managed prefix list)만 허용한다 | C | STATE |
 | SB-PUB-05 | RDS/Aurora는 private subnet에 두고 `publicly_accessible = false`. SG inbound는 앱 SG(task 또는 VPC Lambda)만 허용 | R | PLAN, STATE |
 | SB-PUB-06 | Lambda Function URL 사용 금지. Serverless 입구는 API Gateway 하나 | L | PLAN |
-| SB-PUB-07 | ECR repository는 private. scan on push 활성 | L, C | STATE |
+| SB-PUB-07 | ECR repository는 private. scan on push 활성. 배포하는 이미지의 scan 결과에 CRITICAL이 없다(`/findings`, 배포 검증 때 한 번, D-192) | L, C | STATE |
 | SB-PUB-08 | `exposure = IP_ALLOWLIST`이면 CloudFront에 WAF IP set을 적용하고, 우회 경로가 없는 Blueprint만 허용한다(Serverless 제외) | S, C | STATE, HTTP |
 | SB-PUB-09 | NAT Gateway를 만들지 않는다(D-44). VPC Lambda는 interface endpoint로만 AWS 서비스에 접근 | ALL | PLAN |
 | SB-PUB-10 | 0.0.0.0/0 inbound를 허용하는 SG가 하나도 없다 | ALL | PLAN, STATE |

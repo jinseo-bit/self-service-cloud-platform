@@ -168,7 +168,7 @@ data "aws_iam_policy_document" "worker" {
   }
   statement {
     sid       = "InspectServerlessImages"
-    actions   = ["ecr:DescribeRepositories"]
+    actions   = ["ecr:DescribeRepositories", "ecr:DescribeImageScanFindings"] # SB-PUB-07, SB-PUB-07/findings (D-192)
     resources = [local.env_repository_arn]
   }
   statement {

@@ -49,3 +49,13 @@ def test_override_cannot_bypass_unsupported_or_unprovisionable():
 def test_security_baseline_is_identical_with_or_without_budget_pressure():
     """Override is an admission flag; it never reaches the engine, so the baseline list cannot change."""
     assert rec(budget_usd_month=1)["security_baseline"] == rec(budget_usd_month=10_000)["security_baseline"]
+
+
+def test_drifted_redeploying_and_repairing_environments_still_count():
+    """D-193: these environments keep their AWS resources; leaving them out let a drifted env cost $0 against the cap."""
+    r = rec()
+    for status in ("DRIFTED", "REPAIRING", "REDEPLOYING"):
+        mine = [{"env_id": f"x{i}", "status": status, "tier": "DEV", "cost_upper_usd": 0} for i in range(C.QUOTA_PER_USER["DEV"])]
+        assert "BUD_QUOTA_EXCEEDED" in codes(admit(r, owner_envs=mine, all_envs=mine, env_id="e")), status
+        big = [{"env_id": "y", "status": status, "tier": "DEV", "cost_upper_usd": C.PLATFORM_MONTHLY_CAP_USD}]
+        assert "BUD_PLATFORM_CAP" in codes(admit(r, owner_envs=[], all_envs=big, env_id="e")), status

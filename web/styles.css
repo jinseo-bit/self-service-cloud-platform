@@ -334,3 +334,20 @@ body.has-banner { --banner-h: 33px; }
 .components li { display: grid; grid-template-columns: minmax(96px, auto) 20px 1fr; gap: 8px; align-items: center; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; }
 .components li span[aria-hidden] { color: var(--text-3); }
 tr.current td { background: var(--primary-soft); }
+
+/* D-194 overview tiles */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 8px 0 20px; }
+.tile { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); }
+.tile.warn { background: var(--warn-soft); border-color: transparent; }
+.tile.bad { background: var(--bad-soft); border-color: transparent; }
+.t-label { font-size: 12px; font-weight: 600; color: var(--text-3); }
+.t-value { font-size: 26px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.tile.warn .t-value { color: var(--warn); }
+.tile.bad .t-value { color: var(--bad); }
+.t-unit { font-size: 13px; font-weight: 500; color: var(--text-3); }
+.t-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.chip.warn { background: var(--warn-soft); color: var(--warn); }
+.row-between { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.h3 { font-size: 16px; margin: 0; }
+.table-wrap { overflow-x: auto; }
+.table-wrap th, .table-wrap .chip { white-space: nowrap; }

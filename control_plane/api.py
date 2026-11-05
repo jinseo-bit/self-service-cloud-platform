@@ -16,7 +16,7 @@ from platform_core import baseline, templates
 from platform_core.blueprints import for_architecture, for_env
 from platform_core.engine import InputError, RawInput, recommend
 from platform_core.engine import constants as C
-from platform_core.engine.admission import admit
+from platform_core.engine.admission import ACTIVE, admit
 from platform_core.presets import PRESETS
 from platform_core.pricing import PriceTable
 from platform_core.production_ready import CHECK_TITLES, checks_for
@@ -464,8 +464,31 @@ def list_environments(event, who):
     slim = [{k: e.get(k) for k in ("env_id", "name", "status", "tier", "created_at", "expires_at", "cost_upper_usd",
                                    "owner_email", "created_via")} | {"url": (e.get("outputs") or {}).get("url"),
                                                       "candidate_id": e["recommendation"].get("architecture", {}).get("candidate_id")}
+            | _health(e)
             for e in envs if e["status"] != "DELETED" or qs.get("deleted") == "1"]
-    return 200, {"environments": slim}
+    return 200, {"environments": slim, "summary": _fleet_summary(slim, who)}
+
+
+def _health(e: dict) -> dict:
+    """D-194 overview: what the last check said, without sending every check result."""
+    v, d = e.get("verdict") or {}, e.get("drift") or {}
+    return {"failed_count": len(v.get("failed") or []),
+            "security_failed": bool(v.get("security_failed") or d.get("security")),
+            "endpoint_disabled": bool(v.get("endpoint_disabled") or d.get("endpoint_disabled")),
+            "drift_since": d.get("detected_at"),
+            "checked_at": (e.get("last_recheck") or {}).get("at") or e.get("validated_at")}
+
+
+def _fleet_summary(envs: list[dict], who: dict) -> dict:
+    """Totals for the overview (D-194). The cost total uses the same statuses as the platform cap (admission.ACTIVE)."""
+    soon = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    active = [e for e in envs if e["status"] in ACTIVE]
+    return {"total": len(envs), "active": len(active),
+            "attention": sum(1 for e in envs if e["status"] in ("FAILED", "DEGRADED", "DRIFTED", "DELETE_FAILED")),
+            "security": sum(1 for e in envs if e["security_failed"] and e["status"] not in ("DELETED", "DRAFT")),
+            "expiring": sum(1 for e in active if e.get("expires_at") and e["expires_at"] <= soon),
+            "committed_usd": sum(int(e.get("cost_upper_usd") or 0) for e in active),
+            "cap_usd": C.PLATFORM_MONTHLY_CAP_USD, "scope": "all" if who["admin"] else "mine"}
 
 
 def get_environment(event, who):

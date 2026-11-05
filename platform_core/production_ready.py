@@ -116,6 +116,7 @@ CHECK_TITLES = {i: t for i, _, _, t in STATIC_CHECKS} | {
     "IMG-HEALTH": "상태 확인 경로가 올바른지",
     "SB-PUB-06/permission": "이 API만 앱 함수를 부를 수 있는지",
     "SB-PUB-07/immutable": "이미지 태그를 덮어쓸 수 없는지",
+    "SB-PUB-07/findings": "배포하는 이미지에 심각(CRITICAL) 취약점이 없는지",
     "PR-L-03": "실행 시간·메모리 설정이 올바른지",
     "PR-L-04": "요청 폭주를 막는 제한이 걸려 있는지",
     "SB-SEC-01": "비밀값을 전용 보관소에 두는지",

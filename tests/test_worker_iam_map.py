@@ -40,6 +40,7 @@ CALLS = {
     "iam.get_role_policy": ("iam:GetRolePolicy", [f"arn:aws:iam::{ACCOUNT}:role/sscp-{ENV}-exec"]),
     "logs.describe_log_groups": ("logs:DescribeLogGroups", ANY),
     "ecr.describe_repositories": ("ecr:DescribeRepositories", [f"arn:aws:ecr:{REGION}:{ACCOUNT}:repository/sscp-{ENV}"]),
+    "ecr.describe_image_scan_findings": ("ecr:DescribeImageScanFindings", [f"arn:aws:ecr:{REGION}:{ACCOUNT}:repository/sscp-{ENV}"]),
     "cloudfront.get_distribution_config": ("cloudfront:GetDistributionConfig", [DIST]),
     "cloudfront.update_distribution": ("cloudfront:UpdateDistribution", [DIST]),
     "cloudtrail.get_trail_status": ("cloudtrail:GetTrailStatus", [f"arn:aws:cloudtrail:{REGION}:{ACCOUNT}:trail/sscp-account-trail"]),
@@ -48,7 +49,7 @@ CALLS = {
 }
 
 # Everything the worker runs for a Container environment (validate) and on a security failure (D-65).
-VALIDATOR_FUNCTIONS = [state.validate_container_state, state.task_public_ips, state._wide_statements,
+VALIDATOR_FUNCTIONS = [state.validate_container_state, state.check_image_findings, state.task_public_ips, state._wide_statements,
                        state.check_prod_monitoring, state.disable_distribution]
 
 
