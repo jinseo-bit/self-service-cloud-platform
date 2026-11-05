@@ -17,6 +17,7 @@ STATIC_CHECKS = [
     ("SB-PUB-01/policy", "Security", "STATE", "CDN만 파일을 읽을 수 있는지"),
     ("SB-LOG-02", "Security", "STATE", "접속 기록(log)이 남는지"),
     ("SB-LOG-01", "Security", "STATE", "계정 활동 기록(CloudTrail)이 켜져 있는지"),
+    ("SB-LOG-01/versioning", "Security", "STATE", "기록이 지워져도 이전 버전으로 되살릴 수 있는지"),
     ("PR-ALL-09", "Cost", "STATE", "실제 리소스에 태그가 붙었는지"),
     ("PR-ALL-08", "Operability", "STATE", "개발 환경의 자동 만료일이 설정됐는지"),
     ("PR-ALL-05", "Observability", "STATE", "기록 보관 기간이 정해져 있는지"),

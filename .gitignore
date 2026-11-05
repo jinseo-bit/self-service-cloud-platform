@@ -22,3 +22,7 @@ env.auto.tfvars.json
 venv/
 
 .drawio-mcp/
+
+# terraform plan files (contain account ids and resolved values)
+*.plan
+*.tfplan

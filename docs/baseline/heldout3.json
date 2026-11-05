@@ -1,0 +1,251 @@
+{
+  "_about": "HELD-OUT set 3 (D-184) for analyzer v3. Apps chosen and ground truth written on 2026-11-05 from the repos at the pinned commits, BEFORE v3 is implemented or run. v3's rules are the list fixed in docs/baseline/README.md section 4 (2026-10-27); the implementation must not add a rule outside that list because of these apps, and no rule is changed because of these results. expected_outcome is the real engine run on the expected fields (scripts/heldout3_expected.py), not the analyzer. DRAFT until 이진서 reviews (reviewed_by null).",
+  "selection": "Six apps, none in apps.json / heldout.json / heldout2.json. Three probe v3's target (sub-folder and monorepo layouts, where extra folders must NOT be read as the app); three are ordinary shapes so v3 is also measured off its target.",
+  "apps": [
+    {
+      "id": "h5bp",
+      "repo": "h5bp/html5-boilerplate",
+      "commit": "b6597338e695dc4a8165c5abcb2bfffa586c3ee5",
+      "license": "MIT",
+      "category": "static-plain",
+      "why": "plain static site template with a gulp build; dist/ and src/ each carry their own package.json and webpack config",
+      "expected": {
+        "app_form": "STATIC_SITE",
+        "realtime_connection": false,
+        "large_payload": false,
+        "in_memory_state": false,
+        "non_http": false,
+        "request_duration": null,
+        "data": "NONE",
+        "multi_service": false,
+        "port_env": null,
+        "spa_fallback": false
+      },
+      "evidence": [
+        {
+          "file": "package.json",
+          "finding": "only devDependencies (gulp, eslint, mocha); build = gulp build"
+        },
+        {
+          "file": "dist/index.html",
+          "finding": "ready-made static files; 404.html instead of an SPA fallback"
+        },
+        {
+          "file": "dist/package.json, src/package.json",
+          "finding": "template files for the user's project, not a second app"
+        }
+      ],
+      "notes": "v3 trap: reading sub-folder manifests must not turn dist/ or src/ into a separate app.",
+      "reviewed_by": null,
+      "expected_outcome": {
+        "blueprint": "static",
+        "status": "PROVISIONABLE"
+      }
+    },
+    {
+      "id": "cloud-run-hello",
+      "repo": "GoogleCloudPlatform/cloud-run-hello",
+      "commit": "dd23f50dc2418e5a3b70c56501e5cefdb66f8edf",
+      "license": "Apache-2.0",
+      "category": "go-stateless",
+      "why": "the Cloud Run sample service: Go net/http, PORT env, no storage; job/ and worker-pool/ are separate samples",
+      "expected": {
+        "app_form": "SERVER_APP",
+        "realtime_connection": false,
+        "large_payload": false,
+        "in_memory_state": false,
+        "non_http": false,
+        "request_duration": null,
+        "data": "NONE",
+        "multi_service": false,
+        "port_env": "PORT",
+        "spa_fallback": false
+      },
+      "evidence": [
+        {
+          "file": "hello.go",
+          "finding": "port := os.Getenv(\"PORT\") (default 8080); http.ListenAndServe"
+        },
+        {
+          "file": "go.mod",
+          "finding": "cloudevents sdk (received over HTTP); the rest is // indirect"
+        },
+        {
+          "file": "Dockerfile",
+          "finding": "builds /server from the root; job/ and worker-pool/ have their own Dockerfiles"
+        }
+      ],
+      "notes": "v3 trap: job/ (a batch job) and worker-pool/ (non-HTTP) are other samples in the same repo, not parts of this service.",
+      "reviewed_by": null,
+      "expected_outcome": {
+        "blueprint": "serverless",
+        "status": "PROVISIONABLE"
+      }
+    },
+    {
+      "id": "todo-app",
+      "repo": "docker/getting-started-todo-app",
+      "commit": "55680777bc46c59d3fe0ab9ff7e79ee947d0c757",
+      "license": "Apache-2.0",
+      "category": "monorepo-fixed-port",
+      "why": "client/ (React, Vite) + backend/ (Express) built into one image; MySQL when MYSQL_HOST is set, else a SQLite file",
+      "expected": {
+        "app_form": "SERVER_APP",
+        "realtime_connection": false,
+        "large_payload": false,
+        "in_memory_state": true,
+        "non_http": false,
+        "request_duration": null,
+        "data": "OTHER",
+        "multi_service": false,
+        "port_env": null,
+        "spa_fallback": false
+      },
+      "fixed_port": true,
+      "evidence": [
+        {
+          "file": "Dockerfile",
+          "finding": "final stage copies the client build into backend/src/static; CMD node src/index.js"
+        },
+        {
+          "file": "backend/src/index.js",
+          "finding": "app.listen(3000): port is hard-coded, no env var"
+        },
+        {
+          "file": "backend/package.json",
+          "finding": "express, mysql2, sqlite3"
+        },
+        {
+          "file": "compose.yaml",
+          "finding": "mysql:9.3 with a volume; MYSQL_HOST/USER/PASSWORD/DB for the backend"
+        }
+      ],
+      "notes": "One process serves the screen and the API, so SERVER_APP (not STATIC_PLUS_API). Without MYSQL_HOST it writes a local SQLite file (in_memory_state). MySQL is not a platform engine (OTHER). MySQL makes it UNSUPPORTED; the fixed port 3000 would be the next blocker (INCOMPATIBLE).",
+      "reviewed_by": null,
+      "expected_outcome": {
+        "blueprint": "none",
+        "status": "UNSUPPORTED"
+      }
+    },
+    {
+      "id": "voting-app",
+      "repo": "dockersamples/example-voting-app",
+      "commit": "63e9150ca17af4ed05880d4245e486481f73fcb4",
+      "license": "Apache-2.0",
+      "category": "multi-service",
+      "why": "vote (Flask) + result (Node, socket.io) + worker (.NET) + Redis + Postgres",
+      "expected": {
+        "app_form": "SERVER_APP",
+        "realtime_connection": true,
+        "large_payload": false,
+        "in_memory_state": false,
+        "non_http": false,
+        "request_duration": null,
+        "data": "OTHER",
+        "multi_service": true,
+        "port_env": "PORT",
+        "spa_fallback": false
+      },
+      "evidence": [
+        {
+          "file": "docker-compose.yml",
+          "finding": "services vote, result, worker built here; redis and postgres images"
+        },
+        {
+          "file": "result/server.js",
+          "finding": "socket.io; process.env.PORT || 4000"
+        },
+        {
+          "file": "vote/Dockerfile",
+          "finding": "gunicorn -b 0.0.0.0:80 (fixed)"
+        }
+      ],
+      "notes": "Out of scope (one service per environment). v3 trap: reading vote/, result/, worker/ manifests must lead to multi-service, not to one merged app.",
+      "reviewed_by": null,
+      "expected_outcome": {
+        "blueprint": "none",
+        "status": "UNSUPPORTED"
+      }
+    },
+    {
+      "id": "excalidraw-room",
+      "repo": "excalidraw/excalidraw-room",
+      "commit": "03ff435860b508d7cd9e005cfc90f7977ae2a593",
+      "license": "MIT",
+      "category": "realtime-relay",
+      "why": "Excalidraw's collaboration relay: socket.io rooms, nothing stored",
+      "expected": {
+        "app_form": "SERVER_APP",
+        "realtime_connection": true,
+        "large_payload": false,
+        "in_memory_state": true,
+        "non_http": false,
+        "request_duration": null,
+        "data": "NONE",
+        "multi_service": false,
+        "port_env": "PORT",
+        "spa_fallback": false
+      },
+      "evidence": [
+        {
+          "file": "package.json",
+          "finding": "express, socket.io"
+        },
+        {
+          "file": "src/index.ts",
+          "finding": "process.env.PORT || 80; rooms live in the socket.io server's memory (no adapter)"
+        }
+      ],
+      "notes": "Rooms are per process: two instances would split a room, so in_memory_state is true even though nothing is written to disk.",
+      "reviewed_by": null,
+      "expected_outcome": {
+        "blueprint": "container",
+        "status": "PROVISIONABLE"
+      }
+    },
+    {
+      "id": "python-getting-started",
+      "repo": "heroku/python-getting-started",
+      "commit": "561bc55e4aaf22f98c040611fd613994547b31bb",
+      "license": "MIT",
+      "category": "django-db-optional",
+      "why": "Heroku's Django sample: SQLite locally, Postgres via DATABASE_URL in production; no Dockerfile",
+      "expected": {
+        "app_form": "SERVER_APP",
+        "realtime_connection": false,
+        "large_payload": false,
+        "in_memory_state": false,
+        "non_http": false,
+        "request_duration": null,
+        "data": "POSTGRES",
+        "multi_service": false,
+        "port_env": "PORT",
+        "spa_fallback": false
+      },
+      "evidence": [
+        {
+          "file": "requirements.txt",
+          "finding": "django, gunicorn, dj-database-url, whitenoise; psycopg commented out"
+        },
+        {
+          "file": "gettingstarted/settings.py",
+          "finding": "production: dj_database_url.config(env=DATABASE_URL); local: db.sqlite3"
+        },
+        {
+          "file": "hello/models.py, hello/views.py",
+          "finding": "Greeting model written by the /db page"
+        },
+        {
+          "file": "gunicorn.conf.py",
+          "finding": "bind [::]:$PORT (default 5006)"
+        }
+      ],
+      "notes": "Judgment call for the reviewer: the production path is Postgres (the driver line is commented out until a DB is attached), so POSTGRES. No Dockerfile: an image must be built first (buildpacks, project.toml).",
+      "reviewed_by": null,
+      "expected_outcome": {
+        "blueprint": "serverless",
+        "status": "RECOMMEND_ONLY"
+      }
+    }
+  ]
+}

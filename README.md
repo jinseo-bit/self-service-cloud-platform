@@ -141,6 +141,17 @@ python scripts/e2e_static.py --negative
 
 생성 → READY → 보안 위반 주입(bucket policy의 TLS Deny 제거) → FAILED와 접속 차단 확인 → 삭제 → 리소스 소멸 확인 순서로 실행하고, 소요 시간을 `build/e2e-report.json`에 기록합니다.
 
+### 5. 실측값 (실제 AWS, ap-northeast-2)
+
+| 경로 | 측정 | 값 |
+|---|---|---|
+| Static | 생성(승인 → READY) / 재배포 / 되돌리기 / 삭제 | 3분 58초 / 9초 / 5초 / 4분 5초 |
+| Serverless | 생성(승인 → READY) / cold start Init | 1분 43초 / 129ms |
+| Day-2 | 콘솔 변경 → 감지 | 9초(1차), 11초(2차) |
+| Day-2 | 사람 승인 → 복구 완료(READY) | 3분 47초(1차), 3분 30초(2차) |
+
+E2E에서 무엇이 깨졌고 어떻게 막았는지는 [docs/engineering-log.md](docs/engineering-log.md)와 [docs/postmortem-failed-to-fetch.md](docs/postmortem-failed-to-fetch.md)에 있습니다.
+
 ## 비용과 안전장치
 
 - 플랫폼 자체의 고정비는 거의 없습니다. Lambda, API Gateway, Step Functions, DynamoDB(on-demand), CloudFront, CodeBuild(분 단위 과금)만 씁니다. **NAT Gateway·ALB·RDS는 만들지 않습니다.**

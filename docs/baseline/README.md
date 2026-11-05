@@ -6,6 +6,7 @@
 |---|---|
 | [apps.json](apps.json) | 개발 세트 13개. commit 고정, 근거 파일, SA 기대 결과 |
 | [heldout.json](heldout.json) | held-out 세트 5개. 분석기를 돌리기 **전에** 고르고 정답을 씀 (D-184) |
+| [heldout3.json](heldout3.json) | held-out 세트 3, 6개. 분석기 v3를 만들기 **전에** 고정 (D-190) |
 | [eval-results.md](eval-results.md) / [heldout-results.md](heldout-results.md) | `python scripts/eval_analyzer.py [--heldout] --write` 결과 |
 
 ## 1. 결과: 개발 세트와 held-out 세트
@@ -78,3 +79,18 @@ v2 규칙을 먼저 확정한 뒤 held-out 세트 2([heldout2.json](heldout2.jso
 **위험도**: 두 앱이 "만들 수 있다"로 잘못 나왔다. fastapi-template은 화면만 배포되고 API가 빠지며, wagtail은 DB 없이 만들어진다. 둘 다 3단계 검증에서 걸릴 가능성이 높다(앱이 응답하지 않거나, 화면이 API 호출에 실패함). 그래도 사람이 승인하기 전에 잡아야 하는 오류다.
 
 **결론**: v2 규칙은 "저장소 루트에 앱이 하나"인 구조에서는 잘 맞지만, **실제 프로젝트에 흔한 모노레포·하위 폴더 구조**에서는 앱을 제대로 보지 못한다. v3는 이 구조를 먼저 다루고, 다시 새 held-out 세트로 잰다.
+
+## 5. held-out 세트 3 (2026-11-05, v3 구현 전에 고정)
+
+[heldout3.json](heldout3.json). v3는 아직 구현하지 않았다. 순서는 ① 이 세트를 고정한다 → ② §4 표의 v3 규칙만 구현한다 → ③ 이 세트로 처음 잰다. 앱을 본 뒤 표에 없는 규칙을 더하면 이 세트는 다시 개발 세트가 된다.
+
+| 앱 | 유형 | SA 기대 결과 | 겨냥한 것 |
+|---|---|---|---|
+| h5bp | 정적 템플릿 | static / PROVISIONABLE | `dist/`, `src/`에 각자 package.json → 하위 폴더를 앱으로 오인하지 않는가 |
+| cloud-run-hello | Go, PORT, 저장 없음 | serverless / PROVISIONABLE | `job/`, `worker-pool/`(다른 샘플) → 하위 폴더 오인 |
+| todo-app | client/ + backend/ 한 이미지, MySQL 또는 SQLite, 포트 3000 고정 | none / UNSUPPORTED | 모노레포를 화면+API가 아니라 서버 하나로 보는가, MySQL·SQLite |
+| voting-app | 서비스 3개 + Redis + Postgres | none / UNSUPPORTED | 하위 폴더 manifest를 합쳐 앱 하나로 만들지 않고 멀티 서비스로 보는가 |
+| excalidraw-room | socket.io 중계 | container / PROVISIONABLE | 목표 밖: 실시간 + 프로세스 메모리 상태 |
+| python-getting-started | Django, 운영은 Postgres(DATABASE_URL), Dockerfile 없음 | serverless / RECOMMEND_ONLY | 목표 밖: 주석 처리된 드라이버, 설정으로만 보이는 DB |
+
+python-getting-started의 `data = POSTGRES`는 판단이 갈릴 수 있는 정답이다(드라이버 줄이 주석). 검토할 때 먼저 볼 항목이다.

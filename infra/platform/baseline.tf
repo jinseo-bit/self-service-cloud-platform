@@ -32,14 +32,26 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "logs" {
   }
 }
 
-resource "aws_s3_bucket_lifecycle_configuration" "logs" {
+# B-1 / SB-LOG-01: a deleted or overwritten log object stays recoverable as a noncurrent version.
+resource "aws_s3_bucket_versioning" "logs" {
   bucket = aws_s3_bucket.logs.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "logs" {
+  bucket     = aws_s3_bucket.logs.id
+  depends_on = [aws_s3_bucket_versioning.logs] # noncurrent rules apply once versioning is on
   rule {
     id     = "expire-logs"
     status = "Enabled"
     filter {}
     expiration {
       days = 90
+    }
+    noncurrent_version_expiration { # versions kept for recovery do not grow the bucket forever
+      noncurrent_days = 30
     }
     abort_incomplete_multipart_upload {
       days_after_initiation = 1

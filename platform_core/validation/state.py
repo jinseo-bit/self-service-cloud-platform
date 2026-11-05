@@ -132,6 +132,12 @@ def validate_static_state(*, s3, cloudfront, cloudtrail, ctx: dict) -> list[Chec
         out.append(_r("PR-ALL-05", "Observability", ok, "log bucket expiration rule", "SB-LOG-02"))
     except ClientError as e:
         out.append(_r("PR-ALL-05", "Observability", False, f"no lifecycle on log bucket ({_err(e)})", "SB-LOG-02"))
+    # SB-LOG-01 also protects the log bucket itself: versioning keeps deleted or overwritten logs recoverable (B-1)
+    try:
+        status = s3.get_bucket_versioning(Bucket=ctx["log_bucket"]).get("Status")
+        out.append(_r("SB-LOG-01/versioning", "Security", status == "Enabled", f"log bucket versioning={status}", "SB-LOG-01"))
+    except ClientError as e:
+        out.append(_r("SB-LOG-01/versioning", "Security", False, f"log bucket versioning unreadable ({_err(e)})", "SB-LOG-01"))
     return out
 
 
