@@ -31,6 +31,8 @@ HELDOUT = ROOT / "docs" / "baseline" / "heldout.json"  # D-184: never used to ch
 HELDOUT_OUT = ROOT / "docs" / "baseline" / "heldout-results.md"
 HELDOUT2 = ROOT / "docs" / "baseline" / "heldout2.json"  # D-184: the fair measure of analyzer v2
 HELDOUT2_OUT = ROOT / "docs" / "baseline" / "heldout2-results.md"
+HELDOUT3 = ROOT / "docs" / "baseline" / "heldout3.json"  # D-190: the fair measure of analyzer v3
+HELDOUT3_OUT = ROOT / "docs" / "baseline" / "heldout3-results.md"
 FIELDS = ["app_form", "spa_fallback", "realtime_connection", "large_payload", "in_memory_state", "non_http",
           "request_duration", "data", "multi_service", "port_env"]
 # Fixed answers for what code cannot tell, so outcomes compare the analyzer and nothing else.
@@ -161,13 +163,20 @@ def markdown(r: dict, held: bool = False, src_file: Path | None = None, flag: st
 
 
 if __name__ == "__main__":
-    sets = {"--heldout": (HELDOUT, HELDOUT_OUT), "--heldout2": (HELDOUT2, HELDOUT2_OUT)}
+    sets = {"--heldout": (HELDOUT, HELDOUT_OUT), "--heldout2": (HELDOUT2, HELDOUT2_OUT), "--heldout3": (HELDOUT3, HELDOUT3_OUT)}
     flag = next((a for a in sys.argv if a in sets), "")
     held = bool(flag)
     src_file, out = sets.get(flag, (APPS, OUT))
     md = markdown(evaluate(src_file), held, src_file, flag)
     if flag == "--heldout2":
         md = md.replace("(2026-10-26)", "(2026-10-27, v2 규칙을 확정한 뒤)").replace("heldout.json", "heldout2.json")
+    if flag == "--heldout3":
+        md = (md.replace("(2026-10-26)", "(2026-11-05, v3 규칙 목록은 2026-10-27에 확정, 구현 전)")
+              .replace("heldout.json", "heldout3.json")
+              .replace("(draft, under review)", "(reviewed 2026-11-05)")
+              .replace("**정답(heldout3.json)은 초안이다.** `reviewed_by`가 비어 있는 동안은 이진서가 검토하기 전 값이다.",
+                       "**정답(heldout3.json)은 이진서가 2026-11-05에 검토했다** (값 변경 없음).")
+              .replace("앱 5개라 하나가 20%포인트다.", "앱 6개라 하나가 약 17%포인트다."))
     print(md)
     if "--write" in sys.argv:
         out.write_text(md, encoding="utf-8")

@@ -7,6 +7,7 @@
 | [apps.json](apps.json) | 개발 세트 13개. commit 고정, 근거 파일, SA 기대 결과 |
 | [heldout.json](heldout.json) | held-out 세트 5개. 분석기를 돌리기 **전에** 고르고 정답을 씀 (D-184) |
 | [heldout3.json](heldout3.json) | held-out 세트 3, 6개. 분석기 v3를 만들기 **전에** 고정 (D-190) |
+| [heldout3-results.md](heldout3-results.md) | v3를 세트 3으로 한 번 잰 결과 (D-191) |
 | [eval-results.md](eval-results.md) / [heldout-results.md](heldout-results.md) | `python scripts/eval_analyzer.py [--heldout] --write` 결과 |
 
 ## 1. 결과: 개발 세트와 held-out 세트
@@ -93,4 +94,30 @@ v2 규칙을 먼저 확정한 뒤 held-out 세트 2([heldout2.json](heldout2.jso
 | excalidraw-room | socket.io 중계 | container / PROVISIONABLE | 목표 밖: 실시간 + 프로세스 메모리 상태 |
 | python-getting-started | Django, 운영은 Postgres(DATABASE_URL), Dockerfile 없음 | serverless / RECOMMEND_ONLY | 목표 밖: 주석 처리된 드라이버, 설정으로만 보이는 DB |
 
-python-getting-started의 `data = POSTGRES`는 판단이 갈릴 수 있는 정답이다(드라이버 줄이 주석). 검토할 때 먼저 볼 항목이다.
+정답은 이진서가 2026-11-05에 검토했고 값을 바꾸지 않았다(`reviewed_by`). 판단이 갈릴 수 있던 항목은 python-getting-started의 `data = POSTGRES`(드라이버 줄이 주석), excalidraw-room의 `in_memory_state`, todo-app의 `app_form`이다.
+
+## 6. v3 결과 (2026-11-05)
+
+순서: 세트 3 고정·검토 → §4 표의 규칙 3개만 구현(하위 폴더 `backend/`·`frontend/`·`complete/`·`app/`의 manifest, `frontend/`+`backend/` = 화면+API, `requirements/*.txt`·`requirements-*.txt`, 포트 변수 단어 경계) → 세트 3으로 한 번 측정. 같은 세트로 규칙이 오래전에 굳은 v2도 쟀다(v2도 이 앱들을 본 적이 없으므로 공정한 비교).
+
+| 측정 | v2 → held-out 2 | **v3 → held-out 3** | v2 → held-out 3 | (참고) v3 → held-out 2 |
+|---|---|---|---|---|
+| 항목 정확도 | 88% | **93%** | 93% | 94% |
+| SA와 결과 일치, 초안 그대로 | 60% | **67% (4/6)** | 67% | 80% |
+| SA와 결과 일치, 개발자 확인 후 | 60% | **83% (5/6)** | 83% | 100% |
+| 틀린 항목 중 확인 요청된 것 | 0/6 | **2/4** | 2/4 | 1/3 |
+
+개발 세트(13개)와 held-out 1은 v2와 같은 값이라 회귀는 없다. 마지막 열은 v3 규칙을 만든 세트라 공정한 숫자가 아니다.
+
+**정직한 결론: 세트 3은 v3 규칙의 효과를 보여 주지 못했다.** v3와 v2의 결과가 앱 하나하나까지 같다. 세트 3의 앱 중 v3 규칙이 발동할 구조(`frontend/`+`backend/`, `complete/`, `requirements/` 폴더, `*REPORT*` 변수)가 없었기 때문이다. 이 세트가 보여 준 것은 두 가지다.
+
+1. **v3는 처음 보는 앱에서 나빠지지 않았다.** 하위 폴더를 오인하기 쉬운 h5bp(`dist/`·`src/`), cloud-run-hello(`job/`·`worker-pool/`), todo-app(`client/`+`backend/`)이 모두 맞았다. 하위 폴더 규칙을 표에 적힌 폴더 이름으로만 한정한 것이 이 결과를 만들었다.
+2. **남은 오류는 v3가 다루지 않는 종류다.**
+
+| 앱 | 틀린 것 | 원인 | 위험도 |
+|---|---|---|---|
+| voting-app | 멀티 서비스를 못 봄 | 기존 규칙은 `src/<서비스>/Dockerfile`(깊이 2)만 셈. 이 앱은 `vote/`·`result/`·`worker/`가 루트 바로 아래 | 낮음: DB 확인 단계에서 지원 불가로 걸러짐(확인 후 ✅) |
+| python-getting-started | DB를 못 봄 → **DB 없이 만들 수 있다고 추천** | Postgres 드라이버가 requirements.txt에 주석으로만 있고, `DATABASE_URL` 설정만 보임 | **높음**: 운영 설정이 아니면 Django가 컨테이너 안 SQLite 파일에 쓴다. held-out 1 thelounge와 같은 "조용한 데이터 손실" 유형 |
+| excalidraw-room | 프로세스 메모리 상태 놓침 | socket.io 방(room)은 의존성에 드러나지 않음 | 낮음: 확인 요청됨 |
+
+v3 규칙의 효과는 지금 **규칙의 출처인 held-out 2에서만** 확인됐다(60% → 80% / 100%). 처음 보는 앱에서 효과를 주장하려면 그 구조를 가진 새 held-out 세트가 필요하다. 이 결과를 보고 규칙은 고치지 않는다(D-184). 다음 규칙 후보(v4 목록)는 위 표의 원인에서 정한다: 루트 바로 아래 형제 폴더 Dockerfile 3개 이상 = 멀티 서비스, `DATABASE_URL`·`dj_database_url` 같은 DB 연결 설정은 드라이버가 없어도 DB 확인 요청.

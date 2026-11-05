@@ -17,7 +17,12 @@ from pathlib import Path
 
 SKIP_DIRS = {".git", "node_modules", "vendor", ".venv", "venv", "__pycache__", "target", "dist", "test", "tests",
              "testing", "testdata", "e2e", "docs", "doc", "examples", "example", ".devcontainer", "extra", ".github"}
-VERSION = "v2"  # v2 (2026-10-27): rules from the first held-out set's misses, see docs/baseline/README.md
+VERSION = "v3"  # v3 (2026-11-05): the rule list fixed in docs/baseline/README.md section 4 (from held-out 2's misses)
+# v3: an app often lives in one of these sub-folders (README section 4, the list as written there). Their manifests are
+# read after the root's. frontend/ + backend/ together is a screen plus an API.
+APP_SUBDIRS = ("backend", "frontend", "complete", "app")
+# v3: an env var name that is the port: PORT itself or ending in _PORT... (not REPORT, as in CSP_REPORT_URI).
+PORT_VAR = r"(?:[A-Z0-9_]*_)?PORT[A-Z0-9_]*"
 MAX_DEPTH = 4
 MAX_SOURCE_FILES = 400
 # Test and tooling code is not the app: its env vars and ports are not the app's settings (vaultwarden's
@@ -203,21 +208,31 @@ def _fixed_cmd_port(repo: Repo, files: list[Path]) -> str | None:
     return None
 
 
+def _app_dirs(repo: Repo) -> list[Path]:
+    """The root, then the v3 app sub-folders that exist."""
+    return [repo.root] + [repo.root / d for d in APP_SUBDIRS if (repo.root / d).is_dir()]
+
+
 def _java_build(repo: Repo) -> tuple[str, str]:
-    for name in ("pom.xml", "build.gradle", "build.gradle.kts"):
-        p = repo.root / name
-        if p.exists():
-            return _read(p), name
+    for base in _app_dirs(repo):  # v3: complete/pom.xml (spring guides keep the app there)
+        for name in ("pom.xml", "build.gradle", "build.gradle.kts"):
+            p = base / name
+            if p.exists():
+                return _read(p), repo.rel(p)
     return "", ""
 
 
-def _py_deps(repo: Repo) -> tuple[set[str], str]:
-    for name in ("requirements.txt", "pyproject.toml"):
-        p = repo.root / name
-        if p.exists():
-            txt = _read(p).lower()
-            return set(re.findall(r"^[\s\"']*([a-z0-9_.-]+)", txt, re.M)), name
-    return set(), ""
+def _py_deps(repo: Repo) -> tuple[dict[str, str], str]:
+    """name -> file. v3: also requirements/*.txt and requirements-*.txt, at the root and in the app sub-folders."""
+    deps: dict[str, str] = {}
+    for base in _app_dirs(repo):
+        files = [base / "requirements.txt", base / "pyproject.toml"]
+        files += sorted(base.glob("requirements-*.txt")) + sorted((base / "requirements").glob("*.txt"))
+        for p in files:
+            if p.is_file():
+                for name in re.findall(r"^[\s\"']*([a-z0-9_.-]+)", _read(p).lower(), re.M):
+                    deps.setdefault(name, repo.rel(p))
+    return deps, next(iter(deps.values()), "")
 
 
 def _dockerfiles(repo: Repo) -> list[Path]:
@@ -243,7 +258,7 @@ def analyze(root: str | Path) -> Analysis:
     node = _node_deps(repo)
     go_mod, go_mod_file = _go_modules(repo)
     java, java_file = _java_build(repo)
-    py, py_file = _py_deps(repo)
+    py, _ = _py_deps(repo)  # name -> file it came from
     dockerfiles = _dockerfiles(repo)
     ports = _exposed(repo, dockerfiles)
     rust, cargo, cargo_file = _cargo(repo)
@@ -271,7 +286,7 @@ def analyze(root: str | Path) -> Analysis:
         http_ev.append(f"{go_mod_file}: Go web framework")
     if java and re.search(r"spring-boot-starter-web|quarkus-resteasy|micronaut-http-server", java):
         http_ev.append(f"{java_file}: Java web framework")
-    http_ev += [f"{py_file}: {n}" for n in sorted(PY_SERVER & py)]
+    http_ev += [f"{py[n]}: {n}" for n in sorted(PY_SERVER & py.keys())]
     http_ev += [f"{cargo_file}: {n}" for n in RUST_SERVER if n in rust]
     frontend = sorted(NODE_FRONTEND & node.keys())
     has_index = any(p.name == "index.html" and d <= 1 for p, d in repo.files)
@@ -283,7 +298,11 @@ def analyze(root: str | Path) -> Analysis:
     if non_http:
         unsupported.append("NON_HTTP")
 
-    if http_ev or non_http or (dockerfiles and not frontend and not has_index):
+    split = (repo.root / "frontend").is_dir() and (repo.root / "backend").is_dir()
+    if split and frontend and http_ev:  # v3: a screen in frontend/ and an API in backend/
+        form = Finding("STATIC_PLUS_API", "medium", ["frontend/ and backend/ in one repo"] + http_ev[:2]
+                       + [f"package.json: {', '.join(frontend)}"])
+    elif http_ev or non_http or (dockerfiles and not frontend and not has_index):
         form = Finding("SERVER_APP", "high" if http_ev else "medium",
                        http_ev or [f"{repo.rel(d)}: container image" for d in dockerfiles[:1]])
     elif frontend or has_index:
@@ -305,7 +324,7 @@ def analyze(root: str | Path) -> Analysis:
         rt = [f"{node[n]}: {n}" for n in sorted(NODE_REALTIME & node.keys())]
         rt += [f"{go_mod_file}: {m}" for m in GO_REALTIME if m in go_mod]
         rt += [f"{java_file}: spring-boot-starter-websocket"] if "spring-boot-starter-websocket" in java else []
-        rt += [f"{py_file}: {n}" for n in sorted(PY_REALTIME & py)]
+        rt += [f"{py[n]}: {n}" for n in sorted(PY_REALTIME & py.keys())]
         rt += [f"{cargo_file}: {n}" for n in RUST_REALTIME if n in rust]
         if re.search(r'^\s*axum\s*=.*features\s*=\s*\[[^\]]*"ws"', cargo, re.M):
             rt.append(f"{cargo_file}: axum feature ws")
@@ -317,7 +336,7 @@ def analyze(root: str | Path) -> Analysis:
         up += [f"{p}: multipart upload saved to disk" for p, s in go_src.items()
                if re.search(r"MultipartForm|FormFile\(", s) and re.search(r"CreateTemp|os\.Create\(|os\.WriteFile|os\.OpenFile", s)][:1]
         up += [f"{p}: request body limit flag" for p, s in go_src.items() if re.search(r'"[\w-]*body-limit"', s)][:1]
-        up += [f"{py_file}: python-multipart"] if "python-multipart" in py else []
+        up += [f"{py['python-multipart']}: python-multipart"] if "python-multipart" in py else []
         f["large_payload"] = Finding(bool(up), "medium" if up else "low", up or ["no upload handling found"])
 
         st = [f"{node[n]}: {n} (data on local disk)" for n in sorted(NODE_LOCAL_STATE & node.keys())]
@@ -363,7 +382,7 @@ def analyze(root: str | Path) -> Analysis:
             engines.setdefault(kind, []).append(f"{java_file}: {key}")
     for n, kind in PY_DB.items():
         if n in py:
-            engines.setdefault(kind, []).append(f"{py_file}: {n}")
+            engines.setdefault(kind, []).append(f"{py[n]}: {n}")
     for n, kind in RUST_DB.items():
         if n in rust:
             engines.setdefault(kind, []).append(f"{cargo_file}: {n}")
@@ -383,8 +402,8 @@ def analyze(root: str | Path) -> Analysis:
     if not static and not non_http:
         env_ev: list[tuple[str, str]] = []
         for p, s in {**go_src, **js_src, **py_src, **rs_src}.items():
-            port_env = (r'(?:Getenv|getEnv\w*|LookupEnv|environ\.get|getenv|env::var)\(\s*["\']([A-Z0-9_]*PORT[A-Z0-9_]*)["\']'
-                        r'|process\.env\.([A-Z0-9_]*PORT[A-Z0-9_]*)|environ\[["\']([A-Z0-9_]*PORT[A-Z0-9_]*)["\']\]')
+            port_env = (r'(?:Getenv|getEnv\w*|LookupEnv|environ\.get|getenv|env::var)\(\s*["\'](' + PORT_VAR + r')["\']'
+                        r'|process\.env\.(' + PORT_VAR + r')\b|environ\[["\'](' + PORT_VAR + r')["\']\]')
             for m in re.finditer(port_env, s):
                 env_ev.append((m.group(1) or m.group(2) or m.group(3), p))
             prefix = re.search(r'SetEnvPrefix\(\s*"(\w+)"\s*\)', s)  # viper: flag "port" -> <PREFIX>_PORT
@@ -398,7 +417,7 @@ def analyze(root: str | Path) -> Analysis:
                         env_ev.append((m.group(1).upper().replace("-", "_"), f"{q} + {p}"))
         for p, d in repo.files:
             if d <= 1 and p.name.startswith("settings.json"):
-                for m in re.finditer(r"\$\{([A-Z0-9_]*PORT[A-Z0-9_]*):", _read(p)):
+                for m in re.finditer(r"\$\{(" + PORT_VAR + r"):", _read(p)):
                     env_ev.append((m.group(1), repo.rel(p)))
         if java and "spring-boot" in java:
             env_ev.append(("SERVER_PORT", f"{java_file}: Spring Boot (server.port, default 8080)"))
