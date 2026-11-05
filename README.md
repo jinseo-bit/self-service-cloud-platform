@@ -150,7 +150,7 @@ python scripts/e2e_static.py --negative
 | Day-2 | 콘솔 변경 → 감지 | 9초(1차), 11초(2차) |
 | Day-2 | 사람 승인 → 복구 완료(READY) | 3분 47초(1차), 3분 30초(2차) |
 
-E2E에서 무엇이 깨졌고 어떻게 막았는지는 [docs/engineering-log.md](docs/engineering-log.md)와 [docs/postmortem-failed-to-fetch.md](docs/postmortem-failed-to-fetch.md)에 있습니다.
+주장별 근거는 [docs/evidence-index.md](docs/evidence-index.md)에, E2E에서 무엇이 깨졌고 어떻게 막았는지는 [docs/engineering-log.md](docs/engineering-log.md)와 [docs/postmortem-failed-to-fetch.md](docs/postmortem-failed-to-fetch.md)에 있습니다.
 
 ## 비용과 안전장치
 
