@@ -200,3 +200,49 @@ def test_rust_web_app_with_websocket_and_sqlite(tmp_path):
     a = analyze(repo(tmp_path, {"Cargo.toml": cargo}))
     assert a.value("app_form") == "SERVER_APP" and a.value("realtime_connection") is True
     assert a.value("in_memory_state") is True and a.value("port_env") == "ROCKET_PORT"
+
+
+# ------------------------------------------------------------------ v3 rules (docs/baseline/README.md section 4)
+
+def test_v3_frontend_and_backend_folders_are_a_screen_plus_api(tmp_path):
+    """held-out 2 fastapi-template: React in frontend/, FastAPI + Postgres in backend/ was drafted as a static site."""
+    a = analyze(repo(tmp_path, {"frontend/package.json": {"dependencies": {"react": "18"}},
+                                "backend/pyproject.toml": 'dependencies = [\n  "fastapi>=0.1",\n  "psycopg>=3",\n]\n'}))
+    assert a.value("app_form") == "STATIC_PLUS_API"
+    assert a.value("data") == "POSTGRES"
+    assert "app_form" in a.confirm, "a new app-form rule is not sure enough to skip the developer"
+
+
+def test_v3_app_in_complete_folder_gives_spring_port(tmp_path):
+    """held-out 2 spring-rest: the guide's app lives in complete/, so the port variable was missed."""
+    a = analyze(repo(tmp_path, {"complete/pom.xml": "<artifactId>spring-boot-starter-web</artifactId>",
+                                "initial/pom.xml": "<artifactId>spring-boot-starter-web</artifactId>"}))
+    assert a.value("app_form") == "SERVER_APP" and a.value("port_env") == "SERVER_PORT"
+
+
+def test_v3_requirements_folder_is_read(tmp_path):
+    """held-out 2 wagtail-bakery: Django and psycopg were only in requirements/base.txt and production.txt."""
+    a = analyze(repo(tmp_path, {"requirements/base.txt": "Django>=4\nwagtail\n",
+                                "requirements/production.txt": "-r base.txt\npsycopg[binary]\n",
+                                "requirements-dev.txt": "pytest\n"}))
+    assert a.value("app_form") == "SERVER_APP" and a.value("data") == "POSTGRES"
+    assert any("requirements/production.txt" in e for e in a.findings["data"].evidence)
+
+
+def test_v3_report_is_not_a_port_variable(tmp_path):
+    """held-out 2 wagtail-bakery: CSP_REPORT_URI matched *PORT*; the real variable is PORT."""
+    a = analyze(repo(tmp_path, {"requirements.txt": "django\n",
+                                "settings.py": 'CSP = os.environ.get("CSP_REPORT_URI")\nPORT = os.environ.get("PORT")\n'}))
+    assert a.value("port_env") == "PORT"
+    b = analyze(repo(tmp_path / "only-report", {"requirements.txt": "django\n",
+                                               "settings.py": 'CSP = os.environ.get("CSP_REPORT_URI")\n'}))
+    assert b.value("port_env") is None
+    c = analyze(repo(tmp_path / "prefixed", {"requirements.txt": "django\n",
+                                            "app.py": 'os.environ.get("MEMOS_PORT")\n'}))
+    assert c.value("port_env") == "MEMOS_PORT"
+
+
+def test_v3_frontend_folder_alone_stays_a_static_site(tmp_path):
+    a = analyze(repo(tmp_path, {"frontend/package.json": {"scripts": {"build": "vite build"}, "dependencies": {"vue": "3"}},
+                                "frontend/index.html": ""}))
+    assert a.value("app_form") == "STATIC_SITE"
