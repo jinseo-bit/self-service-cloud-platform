@@ -93,4 +93,4 @@ v2 규칙을 먼저 확정한 뒤 held-out 세트 2([heldout2.json](heldout2.jso
 | excalidraw-room | socket.io 중계 | container / PROVISIONABLE | 목표 밖: 실시간 + 프로세스 메모리 상태 |
 | python-getting-started | Django, 운영은 Postgres(DATABASE_URL), Dockerfile 없음 | serverless / RECOMMEND_ONLY | 목표 밖: 주석 처리된 드라이버, 설정으로만 보이는 DB |
 
-python-getting-started의 `data = POSTGRES`는 판단이 갈릴 수 있는 정답이다(드라이버 줄이 주석). 검토할 때 먼저 볼 항목이다.
+정답은 이진서가 2026-11-05에 검토했고 값을 바꾸지 않았다(`reviewed_by`). 판단이 갈릴 수 있던 항목은 python-getting-started의 `data = POSTGRES`(드라이버 줄이 주석), excalidraw-room의 `in_memory_state`, todo-app의 `app_form`이다.
