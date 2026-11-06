@@ -1,0 +1,13 @@
+# Line endings are fixed per file type so a checkout never rewrites deployed bytes.
+# 2026-11-06: with core.autocrlf=true, switching branches between `terraform plan` and `apply` turned web/app.js
+# and web/styles.css into CRLF, filemd5 changed, and the apply stopped ("inconsistent result").
+* text=auto eol=lf
+
+# Windows PowerShell 5.1 scripts stay CRLF
+*.ps1 text eol=crlf
+
+# Binary files: never convert
+*.png binary
+*.pdf binary
+*.zip binary
+*.pptx binary
