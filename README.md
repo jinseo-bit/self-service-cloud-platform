@@ -147,7 +147,8 @@ python scripts/e2e_static.py --negative
 |---|---|---|
 | Static | 생성(승인 → READY) / 재배포 / 되돌리기 / 삭제 | 3분 58초 / 9초 / 5초 / 4분 5초 |
 | Serverless | 생성(승인 → READY) / cold start Init | 1분 43초 / 129ms |
-| Day-2 | 콘솔 변경 → 감지 | 9초(1차), 11초(2차) |
+| Container | 생성 cold(공유 인프라 포함) / warm | 16분 41초 / 6분 00초 |
+| Day-2 | 보안 설정 변경 → 감지·차단 | 9초(1차), 11초(2차), 6초(Negative E2E) |
 | Day-2 | 사람 승인 → 복구 완료(READY) | 3분 47초(1차), 3분 30초(2차) |
 
 주장별 근거는 [docs/evidence-index.md](docs/evidence-index.md)에, E2E에서 무엇이 깨졌고 어떻게 막았는지는 [docs/engineering-log.md](docs/engineering-log.md)와 [docs/postmortem-failed-to-fetch.md](docs/postmortem-failed-to-fetch.md)에 있습니다.

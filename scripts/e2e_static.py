@@ -6,7 +6,9 @@
 2. POST /environments (portfolio preset) → upload examples/static-site → approve
 3. waits for READY, asserts the site serves our content over HTTPS (records SLO time)
 4. --negative: removes the TLS-deny statement from the env bucket policy (a real
-   misconfiguration), re-runs the worker validator, expects FAILED + endpoint disabled
+   misconfiguration). Since Day-2 (D-186) the platform should notice by itself: expects DRIFTED with SB-TLS-04,
+   the endpoint disabled and the actor recorded, then waits for the repair plan to finish before deleting (two
+   terraform runs must not share the state). Falls back to invoking the validator if no drift is seen in 5 minutes.
 5. DELETE → waits for DELETED → asserts the bucket and distribution are really gone
 
 Writes build/e2e-report.json. Requires credentials for the deployer profile.
@@ -62,11 +64,18 @@ class Api:
         req = urllib.request.Request(self.base + path, method=method,
                                      data=json.dumps(body).encode() if body is not None else None,
                                      headers={"Authorization": self.token, "Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                return r.status, json.loads(r.read() or b"{}")
-        except urllib.error.HTTPError as e:
-            return e.code, json.loads(e.read() or b"{}")
+        # GET is retried through short network drops on the test PC (2026-11-06: a DNS failure mid-wait stopped the
+        # container run while AWS kept going). Writes are not retried: an approve or delete must not be sent twice.
+        for attempt in range(6 if method == "GET" else 1):
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    return r.status, json.loads(r.read() or b"{}")
+            except urllib.error.HTTPError as e:
+                return e.code, json.loads(e.read() or b"{}")
+            except urllib.error.URLError:
+                if method != "GET" or attempt == 5:
+                    raise
+                time.sleep(20)
 
 
 def site_zip() -> bytes:
@@ -116,7 +125,9 @@ def main() -> int:
 
     out = tf_outputs()
     pool = out["user_pool_id"]
-    client_id = boto3.client("cognito-idp", region_name=REGION).list_user_pool_clients(UserPoolId=pool)["UserPoolClients"][0]["ClientId"]
+    # the web client, not the agent client (D-185): an agent token cannot approve
+    clients = boto3.client("cognito-idp", region_name=REGION).list_user_pool_clients(UserPoolId=pool)["UserPoolClients"]
+    client_id = next(c["ClientId"] for c in clients if c["ClientId"] != out.get("agent_client_id"))
     password = "E2e-" + secrets.token_urlsafe(12) + "9a"
     api = Api(out["api_url"], ensure_user(pool, client_id, args.user, password))
     report: dict = {"started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
@@ -149,18 +160,45 @@ def main() -> int:
         bucket = env["outputs"]["bucket_name"]
         pol = json.loads(s3.get_bucket_policy(Bucket=bucket)["Policy"])
         pol["Statement"] = [s for s in pol["Statement"] if s.get("Effect") != "Deny"]
+        t_inject = time.monotonic()
         s3.put_bucket_policy(Bucket=bucket, Policy=json.dumps(pol))
-        r = boto3.client("lambda", region_name=REGION).invoke(
-            FunctionName="sscp-worker", Payload=json.dumps({"action": "validate", "env_id": env_id, "http_attempts": 3, "http_delay": 5}))
-        result = json.loads(r["Payload"].read())
-        _, b = api.call("GET", f"/environments/{env_id}")
-        neg = b["environment"]
-        failed = neg["verdict"]["failed"]
-        print(f"  verdict={result.get('verdict')} failed={failed} endpoint_disabled={neg['verdict'].get('endpoint_disabled')}")
-        assert neg["status"] == "FAILED" and "SB-TLS-04" in failed and neg["verdict"].get("endpoint_disabled")
+        report["negative"] = {"injected_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        try:  # Day-2 path: CloudTrail -> EventBridge -> worker recheck
+            neg = wait_status(api, env_id, {"DRIFTED", "FAILED"}, timeout_s=5 * 60)
+        except TimeoutError:
+            neg = None
+        if neg and neg["status"] == "DRIFTED":
+            d = neg.get("drift") or {}
+            failed = [f["check_id"] for f in d.get("failed") or []]
+            print(f"  Day-2 detected in {int(time.monotonic() - t_inject)}s: failed={failed} actor={d.get('actor')} "
+                  f"event={d.get('event_name')} endpoint_disabled={d.get('endpoint_disabled')}")
+            assert "SB-TLS-04" in failed and d.get("endpoint_disabled") and d.get("event_name") == "PutBucketPolicy", d
+            report["negative"].update(path="day2", failed=failed, detect_seconds=d.get("detect_seconds"),
+                                      seen_after_seconds=int(time.monotonic() - t_inject), actor=d.get("actor"))
+            deadline = time.monotonic() + 10 * 60
+            while time.monotonic() < deadline:  # never run destroy while the repair plan's terraform holds the state
+                _, b = api.call("GET", f"/environments/{env_id}")
+                rp = b["environment"].get("repair_plan") or {}
+                if rp.get("error") or rp.get("created_at"):  # runner repair_plan sets created_at; a failure sets error
+                    report["negative"]["repair_plan"] = {k: rp.get(k) for k in ("created_at", "changes", "error") if rp.get(k) is not None}
+                    print(f"  repair plan finished: {report['negative']['repair_plan'] or list(rp)}")
+                    break
+                time.sleep(15)
+            else:
+                raise AssertionError("repair plan did not finish in 10 minutes; not deleting while terraform may run")
+        else:  # fallback: the pre-Day-2 path
+            print("  no drift seen in 5 minutes; invoking the validator directly")
+            r = boto3.client("lambda", region_name=REGION).invoke(
+                FunctionName="sscp-worker", Payload=json.dumps({"action": "validate", "env_id": env_id, "http_attempts": 3, "http_delay": 5}))
+            json.loads(r["Payload"].read())
+            _, b = api.call("GET", f"/environments/{env_id}")
+            neg = b["environment"]
+            failed = neg["verdict"]["failed"]
+            assert neg["status"] == "FAILED" and "SB-TLS-04" in failed and neg["verdict"].get("endpoint_disabled")
+            report["negative"].update(path="validate", failed=failed)
         cfg = boto3.client("cloudfront").get_distribution_config(Id=env["outputs"]["distribution_id"])["DistributionConfig"]
-        assert cfg["Enabled"] is False
-        report["negative"] = {"failed": failed, "endpoint_disabled": True}
+        assert cfg["Enabled"] is False, "the endpoint must be blocked"
+        report["negative"]["endpoint_disabled"] = True
 
     if not args.keep:
         t1 = time.monotonic()

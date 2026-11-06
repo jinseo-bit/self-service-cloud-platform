@@ -20,7 +20,7 @@
 | 만들기 전(PLAN)에 위반이면 apply하지 않는다 | D-138, `platform_core/validation/plan.py`, `tests/validation/` | 단위 테스트 |
 | 만든 뒤(STATE·HTTP) 기준을 통과해야만 READY | D-139, `platform_core/validation/state.py`·`http.py`, `tests/validation/test_state_validator.py` | 단위 테스트 + E2E |
 | 보안 FAIL이면 접속을 즉시 차단한다 | D-65·D-139, `tests/ui/test_ui_flow.py::test_injected_security_failure_shows_failed`, 2026-10-08 E2E(env-1ee973e8, 오탐이었지만 차단 동작은 실측) | UI 테스트 + 실측 |
-| 배포하는 이미지에 CRITICAL 취약점이 있으면 생성 실패 | D-192, `tests/validation/test_image_findings.py` | 단위 테스트 (**AWS 실측 전**) |
+| 배포하는 이미지에 CRITICAL 취약점이 있으면 생성 실패 | D-192, `tests/validation/test_image_findings.py`. AWS 실측(D-195)은 scratch 이미지라 NOT_APPLICABLE로 정직하게 표시됨 | 단위 테스트 (**차단 경로는 AWS 미실측**) |
 | 로그 버킷이 지워지거나 덮어써져도 되살릴 수 있다 | D-189, `tests/test_log_versioning_rollout.py`, 2026-11-05 apply 후 재검사 READY | 테스트 + 실측 |
 | 워커 권한은 AWS가 실제로 평가하는 리소스 기준 | D-177, `tests/test_worker_iam_map.py` | 테스트 |
 
@@ -28,7 +28,7 @@
 
 | 주장 | 근거 | 종류 |
 |---|---|---|
-| 콘솔에서 보안 설정을 바꾸면 9~11초 안에 감지 | D-188, 1차 E2E(env-c9fc390e) 9초, 2차 E2E(env-9183234c) 11초, `scripts/day2_report.ps1` | 실측 2회 |
+| 보안 설정을 바꾸면 6~11초 안에 감지하고 접속을 차단 | D-188: 1차 9초(env-c9fc390e), 2차 11초(env-9183234c, 콘솔). D-195: Negative E2E 6초(env-62e6a114, `PutBucketPolicy`) | 실측 3회 |
 | 감지 후 복구는 사람 승인 → 저장된 plan만 적용 → 재검증 | D-186, `control_plane/worker.py`, `tests/control_plane/test_drift.py` | 테스트 + 실측 |
 | 승인 후 복구 완료까지 3분 30초~3분 47초 | D-188 (`apply_seconds`) | 실측 2회 |
 | 차단 중 재검사가 같은 drift를 중복 기록하지 않는다 | D-188 ②, 2차 E2E에서 `drift_history` 1건 유지 | 실측 + 테스트 |
@@ -50,7 +50,7 @@
 | 승인 전에 예상 비용을 보여 주고 상한을 넘으면 막는다 | D-158, `platform_core/engine/admission.py`, `tests/engine/test_admission.py` | 테스트 |
 | drift·복구·재배포 중인 환경도 상한·한도에 포함 | D-193, `test_drifted_redeploying_and_repairing_environments_still_count` | 테스트 (버그 수정) |
 | 단가는 공개 가격표를 손으로 입력한 snapshot | `platform_core/pricing/snapshot.json` (`seed-2026-10-04`, source=manual), D-142 | 데이터 |
-| 생성 시간: Static 3분 58초, Serverless 1분 43초, Container 첫 생성 20분 2초(공유 인프라 12분 12초 포함) | [engineering-log.md](engineering-log.md), 2026-10-05·10-07·10-11 E2E | 실측 |
+| 생성 시간: Static 3분 56~58초, Serverless 1분 43초, Container cold 16분 41초 / warm 6분 00초 | [engineering-log.md](engineering-log.md), 2026-10-05·10-07 E2E, D-195 | 실측 |
 | Static 재배포 9초, 되돌리기 5초, 삭제 4분 5초 | 2026-10-05 E2E, README §5 | 실측 |
 
 ## 6. 비교 (피드백 ①④)
@@ -69,7 +69,6 @@
 | 조용한 데이터 손실 유형(주석 처리된 DB 드라이버 등)을 분석기가 놓칠 수 있다 | held-out 1 thelounge, held-out 3 python-getting-started |
 | 이미지 취약점은 배포 때 한 번만. 운영 중 새 CVE는 못 잡음 | D-192 (사용자 결정) |
 | OS·런타임 자동 패치 없음 | 비교 문서 §3.1 |
-| Negative E2E(B-2) 미실행 | Backlog B-2 |
-| Container 두 번째 환경(warm) 생성 시간 미측정 | 남은 일 |
+| CRITICAL 이미지 차단은 AWS에서 아직 실측하지 않음 (테스트 이미지가 스캔 미지원) | D-195 |
 | 계정 1개, DEV 위주, 사용자 소수 | 학습 프로젝트 범위 |
 | 단가는 수동 snapshot (Price List API 자동 갱신 안 함) | O-08 |

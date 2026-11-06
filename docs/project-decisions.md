@@ -263,6 +263,7 @@
 | D-192 | **이미지 취약점 = 배포 검증 때 한 번 (재검사 없음)**: 새 STATE 검사 `SB-PUB-07/findings`가 배포하는 이미지(digest)의 ECR scan-on-push 결과를 읽음. **CRITICAL 1개 이상이면 Security FAIL**(→ 생성 실패·접속 차단, D-139), HIGH 이하는 개수만 기록. 스캔이 끝날 때까지 최대 2분 대기, 끝나지 않거나 AWS가 결과를 줄 수 없으면(UNSUPPORTED_IMAGE 등) NOT_APPLICABLE로 명시(통과로 숨기지 않음), 권한 오류는 FAIL. 배포·재배포·복구 후 검증(`validate`)에서만 실행하고 Day-2 재검사에서는 실행하지 않음(새 CVE가 운영 중 환경을 갑자기 차단하지 않도록). worker 권한 `ecr:DescribeImageScanFindings`(환경 ECR 한정) | 사용자 결정(2026-11-05): 재검사 없이 한 번, CRITICAL이면 실패. 기존 SB-PUB-07은 scan on push **설정**만 확인했고 결과는 읽지 않았음 | 확정, apply 대기 |
 | D-193 | **비용 상한·사용자 한도에 DRIFTED·REPAIRING·REDEPLOYING 포함**: `admission.ACTIVE`에 세 상태가 빠져 있어, drift된 환경은 AWS 리소스가 있는데도 상한·한도 계산에서 0으로 취급됨(현황판 비용 합계를 만들다 발견). 세 상태 추가 + 테스트 | D-150·D-186에서 상태를 추가할 때 admission을 함께 고치지 않음 | 확정, apply 대기 |
 | D-194 | **전체 환경 현황판**: 홈 목록을 현황판으로 확장. 관리자는 모든 사용자의 환경(`?all=1`), 일반 사용자는 자기 환경. 요약 카드(리소스 사용 중·확인 필요·보안 기준 실패·월 최대 예상 비용 합계(관리자는 플랫폼 상한 $30 대비)·2일 안에 자동 삭제), 표에 실행 방식·보안/검사 상태(통과·검사 n개 실패·설정 변경·보안 위반/접속 차단)·마지막 검사 시각·자동 삭제 시각, "확인이 필요한 환경만" 필터. 합계는 서버(`list_environments`의 `summary`)가 admission과 같은 상태 기준으로 계산 | 1차 발표 추가 제안 '배포 후 관리', D-180의 Day-2 범위(전체 현황). 사용자 결정(2026-11-05): 관리자 전체·사용자 자기 것 | 확정, apply 대기 |
+| D-195 | **2026-11-06 실제 AWS E2E 2건 (B-2, Container warm)**. ① **Negative E2E**(`scripts/e2e_static.py --negative`, env-62e6a114): 생성 3분 56초(검사 35 PASS) → 버킷 정책에서 TLS Deny 제거(`PutBucketPolicy`, sscp-deployer) → **Day-2가 6초 만에 감지**, `SB-TLS-04` 보안 drift로 접속 차단(CloudFront Enabled=false 확인), 복구안 46초(변경 2·교체 0) → 복구안 완료 후 삭제 2분 23초, 버킷·배포 소멸 확인. 스크립트를 Day-2 기준으로 고침(감지 경로 우선, 5분 내 미감지 시 직접 검증), 웹/에이전트 Cognito 클라이언트 구분, 복구안 terraform 종료 후 삭제. ② **Container cold/warm**(`scripts/e2e_container_timing.py`): cold(env-18570dd0, 공유 VPC·ALB·클러스터 포함) **16분 41초**, warm(env-15a07f74) **6분 00초**, warm 삭제 7분 10초(공유 인프라 유지 기록), 마지막 환경 삭제 16분 4초(환경 6분 41초 + 공유 인프라 9분 12초) 후 공유 인프라 삭제 기록. 두 환경 모두 실패 0. **이미지 스캔(D-192) 첫 실측 = NOT_APPLICABLE**: `traefik/whoami`(scratch, OS 패키지 없음)에 ECR 기본 스캔이 `UnsupportedImageError` → CRITICAL 차단 경로는 아직 AWS 미실측. 시간은 플랫폼 이벤트 기록 기준(테스트 PC 절전으로 스크립트 타이머가 부풀어 사용하지 않음). `sscp-deployer`에 ELB 읽기 권한이 없어 공유 인프라 확인은 환경 기록으로 대체(테스트를 위해 권한을 넓히지 않음). E2E 조회(GET)는 네트워크 끊김 시 재시도, 쓰기는 재시도 안 함 | Backlog B-2, 남은 일(Container warm) | 확정 |
 
 ## 16. Finalization Backlog (2026-10-05, 사용자 지정 — Serverless 이후 처리)
 
@@ -271,7 +272,7 @@ Static 결과는 **STATIC BLUEPRINT E2E COMPLETE**로 유지한다. 아래는 �
 | # | 항목 | 비고 |
 |---|---|---|
 | B-1 | SB-LOG-01 로그 버킷 versioning 보완 | `baseline.tf`에 `aws_s3_bucket_versioning.logs` + noncurrent 만료, STATE SB-LOG-01에 versioning 검사 추가 → **완료(D-189, 2026-11-05 apply·실측 확인)** |
-| B-2 | Negative E2E | `scripts/e2e_static.py --negative` (실제 리소스 생성, 별도 승인) |
+| B-2 | Negative E2E | `scripts/e2e_static.py --negative` (실제 리소스 생성, 별도 승인) → **완료(D-195, 2026-11-06, Day-2 감지 6초·차단 확인)** |
 | B-3 | Engineering log 정리 | 첫 apply, plan 리뷰(CloudFront 권한 축소), presigned URL 장애 → **초안 [engineering-log.md](engineering-log.md)** (CloudFront 권한 축소 세부는 기록 확인 필요) |
 | B-4 | Postmortem 작성 | 업로드 "Failed to fetch": 글로벌 S3 endpoint 307 → CORS 실패, 로컬 시뮬레이터가 못 잡은 이유, 재발 방지 테스트 → **초안 [postmortem-failed-to-fetch.md](postmortem-failed-to-fetch.md)** (D-188 라우트 404와 함께) |
 | B-5 | README / 제안서 실측값 반영 | 생성 3분 58초, 재배포 9초, rollback 5초, 삭제 4분 5초 → **README 반영**(제안서는 미반영) |
